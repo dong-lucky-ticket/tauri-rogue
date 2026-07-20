@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "节奏地牢 Lite",
-        "width": 1024,
-        "height": 768,
+        "width": 960,
+        "height": 640,
         "resizable": true,
         "fullscreen": false
       }
