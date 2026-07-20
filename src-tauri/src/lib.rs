@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use tauri::State;
 
@@ -221,8 +222,68 @@ fn enemy_at_except(enemies: &[Enemy], position: Position, excluded_index: usize)
         .any(|(index, enemy)| index != excluded_index && same_position(enemy.position, position))
 }
 
+// 使用 BFS 搜索敌人到玩家的最短路径，并返回路径上的下一格。
+// 地图规模较小，每次敌人回合重新搜索可以换取清晰且可靠的追踪逻辑。
+fn find_enemy_next_step(
+    map: &[Vec<bool>],
+    enemies: &[Enemy],
+    enemy_index: usize,
+    start: Position,
+    target: Position,
+) -> Option<Position> {
+    let mut queue = VecDeque::new();
+    let mut visited = vec![vec![false; MAP_WIDTH]; MAP_HEIGHT];
+    let mut previous = vec![vec![None; MAP_WIDTH]; MAP_HEIGHT];
+    let directions: [(isize, isize); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+
+    visited[start.y][start.x] = true;
+    queue.push_back(start);
+
+    while let Some(current) = queue.pop_front() {
+        for (dx, dy) in directions {
+            let next_x = current.x as isize + dx;
+            let next_y = current.y as isize + dy;
+
+            if !can_walk(map, next_x, next_y) {
+                continue;
+            }
+
+            let next = Position {
+                x: next_x as usize,
+                y: next_y as usize,
+            };
+
+            if visited[next.y][next.x]
+                || enemy_at_except(enemies, next, enemy_index)
+                || same_position(next, start)
+            {
+                continue;
+            }
+
+            visited[next.y][next.x] = true;
+            previous[next.y][next.x] = Some(current);
+
+            if same_position(next, target) {
+                let mut step = next;
+
+                // 从目标格反向回溯，直到找到紧邻起点的第一格。
+                while let Some(parent) = previous[step.y][step.x] {
+                    if same_position(parent, start) {
+                        return Some(step);
+                    }
+                    step = parent;
+                }
+            }
+
+            queue.push_back(next);
+        }
+    }
+
+    None
+}
+
 // 让所有敌人响应一次玩家行动。
-// 敌人相邻时攻击，否则尝试沿横向或纵向靠近玩家。
+// 敌人相邻时攻击，否则沿 BFS 找到的最短路径靠近玩家。
 fn enemy_turn(state: &mut GameState) {
     if state.game_over {
         return;
@@ -242,38 +303,14 @@ fn enemy_turn(state: &mut GameState) {
             continue;
         }
 
-        let horizontal_step = match player_position.x.cmp(&enemy_position.x) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Greater => 1,
-            std::cmp::Ordering::Equal => 0,
-        };
-        let vertical_step = match player_position.y.cmp(&enemy_position.y) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Greater => 1,
-            std::cmp::Ordering::Equal => 0,
-        };
-        let candidates = [
-            Position {
-                x: (enemy_position.x as isize + horizontal_step).max(0) as usize,
-                y: enemy_position.y,
-            },
-            Position {
-                x: enemy_position.x,
-                y: (enemy_position.y as isize + vertical_step).max(0) as usize,
-            },
-        ];
-
-        for candidate in candidates {
-            if same_position(candidate, enemy_position)
-                || same_position(candidate, player_position)
-                || !can_walk(&state.map, candidate.x as isize, candidate.y as isize)
-                || enemy_at_except(&state.enemies, candidate, index)
-            {
-                continue;
-            }
-
-            state.enemies[index].position = candidate;
-            break;
+        if let Some(next_step) = find_enemy_next_step(
+            &state.map,
+            &state.enemies,
+            index,
+            enemy_position,
+            player_position,
+        ) {
+            state.enemies[index].position = next_step;
         }
     }
 
