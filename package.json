@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:web": "vite build",
+    "build:desktop": "tauri build --no-bundle",
+    "build:desktop:local": "tauri build --config src-tauri/tauri.local.conf.json",
+    "build:desktop:release": "tauri build --config src-tauri/tauri.release.conf.json",
     "tauri": "tauri"
   },
   "devDependencies": {
