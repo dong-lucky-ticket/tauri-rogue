@@ -63,18 +63,38 @@ struct Portal {
 // 前后端共享的完整游戏状态。
 #[derive(Clone, Serialize)]
 struct GameState {
+    // 地图网格；true 表示该格是可行走地板，false 表示墙体或未生成区域。
     map: Vec<Vec<bool>>,
+    // 地图生成出的房间矩形，供前端调试层显示房间边界。
     rooms: Vec<Room>,
+    // 地图生成出的走廊连接信息，供前端调试层显示走廊路径。
     corridors: Vec<Corridor>,
+    // 玩家当前所在的网格坐标。
     player: Position,
+    // 当前关卡中尚未被击败的敌人实体。
     enemies: Vec<Enemy>,
+    // 当前关卡中的宝箱及其是否已开启状态。
     chests: Vec<Chest>,
+    // 连接下一关的门户及其当前位置和激活状态。
     portal: Portal,
+    // 当前关卡编号，从第一关开始递增。
     level: u32,
+    // 当前关卡使用的随机种子，可用于复现地图。
     seed: u32,
+    // 玩家已经执行的行动次数，撞墙也会消耗一次行动。
     moves: u32,
+    // 当前游戏会话累计击败的敌人数量。
     defeated: u32,
+    // 当前游戏会话累计获得的金币数量。
     gold: u32,
+    // 玩家当前生命值，降为零时进入死亡状态。
+    hp: u32,
+    // 玩家本关使用的最大生命值上限。
+    max_hp: u32,
+    // 玩家是否已经死亡；为 true 时会暂时禁止继续行动。
+    game_over: bool,
+    // 最近一次行动产生的事件文本，用于显示给前端玩家。
+    last_event: String,
 }
 
 // Tauri 应用中保存当前游戏会话的状态容器。
@@ -188,6 +208,85 @@ fn refresh_portal(state: &mut GameState) {
     state.portal.active = state.enemies.is_empty() && state.chests.iter().all(|chest| chest.opened);
 }
 
+// 判断两个网格坐标是否相同。
+fn same_position(first: Position, second: Position) -> bool {
+    first.x == second.x && first.y == second.y
+}
+
+// 判断一个位置是否已经被其他敌人占用。
+fn enemy_at_except(enemies: &[Enemy], position: Position, excluded_index: usize) -> bool {
+    enemies
+        .iter()
+        .enumerate()
+        .any(|(index, enemy)| index != excluded_index && same_position(enemy.position, position))
+}
+
+// 让所有敌人响应一次玩家行动。
+// 敌人相邻时攻击，否则尝试沿横向或纵向靠近玩家。
+fn enemy_turn(state: &mut GameState) {
+    if state.game_over {
+        return;
+    }
+
+    let player_position = state.player;
+    let mut damage_count = 0;
+
+    for index in 0..state.enemies.len() {
+        let enemy_position = state.enemies[index].position;
+        let distance = enemy_position.x.abs_diff(player_position.x)
+            + enemy_position.y.abs_diff(player_position.y);
+
+        if distance == 1 {
+            state.hp = state.hp.saturating_sub(1);
+            damage_count += 1;
+            continue;
+        }
+
+        let horizontal_step = match player_position.x.cmp(&enemy_position.x) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Greater => 1,
+            std::cmp::Ordering::Equal => 0,
+        };
+        let vertical_step = match player_position.y.cmp(&enemy_position.y) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Greater => 1,
+            std::cmp::Ordering::Equal => 0,
+        };
+        let candidates = [
+            Position {
+                x: (enemy_position.x as isize + horizontal_step).max(0) as usize,
+                y: enemy_position.y,
+            },
+            Position {
+                x: enemy_position.x,
+                y: (enemy_position.y as isize + vertical_step).max(0) as usize,
+            },
+        ];
+
+        for candidate in candidates {
+            if same_position(candidate, enemy_position)
+                || same_position(candidate, player_position)
+                || !can_walk(&state.map, candidate.x as isize, candidate.y as isize)
+                || enemy_at_except(&state.enemies, candidate, index)
+            {
+                continue;
+            }
+
+            state.enemies[index].position = candidate;
+            break;
+        }
+    }
+
+    if damage_count > 0 {
+        state.last_event = format!("哥布林攻击了你，生命值 -{damage_count}。");
+    }
+
+    if state.hp == 0 {
+        state.game_over = true;
+        state.last_event = "你倒下了。点击“重新生成地牢”再试一次。".to_string();
+    }
+}
+
 // 使用指定种子创建一个完整关卡。
 fn build_level(seed: u32, level: u32) -> GameState {
     let (map, player, mut floor_positions, rooms, corridors) = create_map(seed);
@@ -231,6 +330,10 @@ fn build_level(seed: u32, level: u32) -> GameState {
         moves: 0,
         defeated: 0,
         gold: 0,
+        hp: 5,
+        max_hp: 5,
+        game_over: false,
+        last_event: "清理哥布林并打开宝箱，激活门户。".to_string(),
     }
 }
 
@@ -254,6 +357,11 @@ fn player_action(
         .as_mut()
         .ok_or_else(|| "start a dungeon before sending actions".to_string())?;
 
+    // 死亡后暂时锁定玩家操作，避免在重开前继续修改状态。
+    if state.game_over {
+        return Ok(state.clone());
+    }
+
     let (dx, dy) = match action {
         PlayerAction::MoveUp => (0, -1),
         PlayerAction::MoveDown => (0, 1),
@@ -268,6 +376,8 @@ fn player_action(
     state.moves += 1;
 
     if !can_walk(&state.map, next_x, next_y) {
+        state.last_event = "你撞到了墙。".to_string();
+        enemy_turn(state);
         return Ok(state.clone());
     }
 
@@ -282,6 +392,7 @@ fn player_action(
     }) {
         state.enemies.remove(enemy_index);
         state.defeated += 1;
+        state.last_event = "你击败了一个哥布林。".to_string();
     } else {
         // 没有敌人时移动玩家，并检查目标格上的宝箱。
         state.player = next_position;
@@ -293,11 +404,17 @@ fn player_action(
                 chest.opened = true;
                 // 当前原型每个宝箱固定奖励 10 金币。
                 state.gold += 10;
+                state.last_event = "你打开了宝箱，获得 10 金币。".to_string();
             }
         }
     }
 
+    // 玩家完成行动后，所有敌人依次移动或攻击。
+    enemy_turn(state);
     refresh_portal(state);
+    if state.portal.active {
+        state.last_event = "所有目标已处理，门户已经激活。".to_string();
+    }
     Ok(state.clone())
 }
 

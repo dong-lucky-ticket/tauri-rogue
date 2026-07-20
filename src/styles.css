@@ -130,6 +130,22 @@ body {
   color: #f0bd73;
 }
 
+#event-status {
+  /* 当前事件比固定操作提示更醒目，帮助玩家理解每回合发生了什么。 */
+  color: #e7c58a;
+}
+
+#health.health-warning {
+  /* 生命值低于一半时使用暖色提醒危险。 */
+  color: #f0bd73;
+}
+
+#health.health-critical {
+  /* 只剩一点生命值时使用红色，并让数值产生轻微呼吸感。 */
+  color: #ef806e;
+  animation: health-pulse 0.8s ease-in-out infinite alternate;
+}
+
 #new-dungeon {
   /* 按钮需要重新开启指针事件，因为父级 HUD 默认不接收输入。 */
   pointer-events: auto;
@@ -142,6 +158,71 @@ body {
 }
 
 #new-dungeon:hover {
+  background: #5a3640;
+}
+
+.damage-flash {
+  /* 受击反馈覆盖画面边缘，不拦截键盘和鼠标操作。 */
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 0 rgba(224, 59, 59, 0);
+}
+
+.damage-flash.active {
+  animation: damage-flash 0.45s ease-out;
+}
+
+.game-over {
+  /* 死亡时覆盖地图，但不影响顶部 HUD 的布局计算。 */
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  background: rgba(10, 9, 16, 0.68);
+}
+
+/* display 属性会覆盖 hidden 的浏览器默认样式，因此需要显式恢复隐藏行为。 */
+.game-over[hidden] {
+  display: none;
+}
+
+.game-over-card {
+  min-width: 280px;
+  padding: 28px 32px;
+  border: 1px solid #9e5d51;
+  color: #f6e8c8;
+  background: #211a29;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.game-over-card h2 {
+  margin: 0 0 8px;
+  color: #ef947d;
+  font-size: 28px;
+}
+
+.game-over-card p {
+  margin: 0 0 20px;
+  color: #c6b39d;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+}
+
+.game-over-card button {
+  padding: 9px 16px;
+  border: 1px solid #a66c45;
+  color: #fff0d3;
+  background: #422b37;
+  font: inherit;
+  cursor: pointer;
+}
+
+.game-over-card button:hover {
   background: #5a3640;
 }
 
@@ -179,5 +260,27 @@ body {
   .stats {
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+}
+
+@keyframes damage-flash {
+  0% {
+    background: rgba(224, 59, 59, 0.34);
+    box-shadow: inset 0 0 0 8px rgba(255, 93, 77, 0.72);
+  }
+
+  100% {
+    background: rgba(224, 59, 59, 0);
+    box-shadow: inset 0 0 0 0 rgba(255, 93, 77, 0);
+  }
+}
+
+@keyframes health-pulse {
+  from {
+    text-shadow: 0 0 0 rgba(239, 128, 110, 0);
+  }
+
+  to {
+    text-shadow: 0 0 8px rgba(239, 128, 110, 0.8);
   }
 }

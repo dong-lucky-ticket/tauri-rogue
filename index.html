@@ -21,6 +21,7 @@
         <div class="stats">
           <span id="position" class="stat">位置</span>
           <span id="level" class="stat">关卡</span>
+          <span id="health" class="stat">生命</span>
           <span id="moves" class="stat">回合</span>
           <span id="defeated" class="stat">击败</span>
           <span id="gold" class="stat">金币</span>
@@ -30,10 +31,22 @@
       <!-- 操作提示和开发期调试状态。 -->
       <p class="hint">
         WASD / 方向键移动 · 宝箱自动开启 · 撞击哥布林攻击 ·
+        <br />
+        <span id="event-status">清理哥布林并打开宝箱，激活门户。</span> ·
         <span id="portal-status">门户未激活</span> ·
         <span id="debug-status">F3 调试层 关</span>
       </p>
     </div>
+    <!-- 受击时显示短暂的红色屏幕闪光，避免只依赖数字变化传达伤害。 -->
+    <div id="damage-flash" class="damage-flash" aria-hidden="true"></div>
+    <!-- 玩家生命值归零后显示覆盖层，避免死亡状态下继续操作地图。 -->
+    <section id="game-over" class="game-over" hidden>
+      <div class="game-over-card">
+        <h2>你倒下了</h2>
+        <p>地牢还在等待下一次挑战。</p>
+        <button id="restart-game" type="button">重新开始</button>
+      </div>
+    </section>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

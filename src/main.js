@@ -53,11 +53,17 @@ const state = {
   moves: 0,
   defeated: 0,
   gold: 0,
+  hp: 5,
+  maxHp: 5,
+  gameOver: false,
+  lastEvent: '',
 };
 const assets = {};
 let debugVisible = false;
 // 防止上一次行动完成前重复发送移动请求。
 let actionInFlight = false;
+// 记录受击反馈结束时间，用于让玩家精灵短暂闪烁。
+let damageFeedbackUntil = 0;
 
 // 判断坐标是否在地图范围内，并且对应位置是地板。
 function isFloor(x, y) {
@@ -202,19 +208,35 @@ function renderPlayer() {
 
 // 将游戏状态同步到 HUD 文本。
 function updateHud() {
+  const healthElement = document.querySelector('#health');
   document.querySelector('#position').textContent = `位置 ${state.player.x}, ${state.player.y}`;
   document.querySelector('#moves').textContent = `回合 ${state.moves}`;
   document.querySelector('#level').textContent = `关卡 ${state.level}`;
+  healthElement.textContent = `生命 ${state.hp}/${state.maxHp}`;
+  healthElement.classList.toggle('health-warning', state.hp <= Math.ceil(state.maxHp / 2));
+  healthElement.classList.toggle('health-critical', state.hp <= 1);
   document.querySelector('#seed').textContent = `种子 ${state.seed}`;
   document.querySelector('#defeated').textContent = `击败 ${state.defeated}`;
   document.querySelector('#gold').textContent = `金币 ${state.gold}`;
+  document.querySelector('#event-status').textContent = state.lastEvent;
   document.querySelector('#portal-status').textContent = state.portal.active
     ? '门户已激活'
     : '门户未激活';
+  document.querySelector('#game-over').hidden = !state.gameOver;
+}
+
+// 播放一次明确的受击反馈，帮助玩家感知生命值已经下降。
+function showDamageFeedback() {
+  const flash = document.querySelector('#damage-flash');
+  flash.classList.remove('active');
+  void flash.offsetWidth;
+  flash.classList.add('active');
+  damageFeedbackUntil = performance.now() + 450;
 }
 
 // 应用后端返回的新状态，并刷新所有可视区域。
 function applyGameState(nextState) {
+  const tookDamage = nextState.hp < state.hp;
   state.map = nextState.map;
   state.rooms = nextState.rooms;
   state.corridors = nextState.corridors;
@@ -227,10 +249,15 @@ function applyGameState(nextState) {
   state.moves = nextState.moves;
   state.defeated = nextState.defeated;
   state.gold = nextState.gold;
+  state.hp = nextState.hp;
+  state.maxHp = nextState.max_hp;
+  state.gameOver = nextState.game_over;
+  state.lastEvent = nextState.last_event;
   renderMap();
   renderDebugLayer();
   renderPlayer();
   updateHud();
+  if (tookDamage) showDamageFeedback();
 }
 
 // 生成随机种子并请求后端创建新的地牢。
@@ -319,6 +346,7 @@ async function main() {
       playerSprite.y = (state.player.y + 0.5) * TILE_SIZE + breathing * 1.2;
       playerSprite.scale.set(1 + breathing * 0.035, 1 - breathing * 0.025);
       playerSprite.rotation = breathing * 0.025;
+      playerSprite.alpha = performance.now() < damageFeedbackUntil ? 0.5 : 1;
     }
 
     if (portalSprite) {
@@ -366,6 +394,7 @@ async function main() {
   });
 
   document.querySelector('#new-dungeon').addEventListener('click', newDungeon);
+  document.querySelector('#restart-game').addEventListener('click', newDungeon);
 }
 
 // 启动前端应用。
