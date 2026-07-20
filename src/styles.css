@@ -111,6 +111,10 @@ body {
   text-shadow: 0 1px 3px #000;
 }
 
+.hint #debug-status {
+  color: #f0bd73;
+}
+
 #new-dungeon {
   pointer-events: auto;
   padding: 8px 12px;

@@ -25,11 +25,14 @@ const BOARD_HEIGHT = MAP_HEIGHT * TILE_SIZE;
 const app = new PIXI.Application();
 const board = new PIXI.Container();
 const mapLayer = new PIXI.Container();
+const debugLayer = new PIXI.Container();
 const actorLayer = new PIXI.Container();
 
 // 前端缓存后端返回的完整游戏状态，只负责渲染和发送操作。
 const state = {
   map: [],
+  rooms: [],
+  corridors: [],
   player: { x: 0, y: 0 },
   enemies: [],
   chests: [],
@@ -39,6 +42,7 @@ const state = {
   gold: 0,
 };
 const assets = {};
+let debugVisible = false;
 // 防止上一次行动完成前重复发送移动请求。
 let actionInFlight = false;
 
@@ -94,8 +98,62 @@ function renderMap() {
   }
 }
 
-// 重建角色层中的宝箱、敌人和玩家精灵。
+// 绘制调试层：显示走廊路径、房间边界和房间编号。
+function renderDebugLayer() {
+  debugLayer.removeChildren();
+  debugLayer.visible = debugVisible;
+  if (!debugVisible) return;
+
+  const roomColors = [0x5ee7ff, 0xff8fab, 0xb8f2a2, 0xffd166];
+
+  state.corridors.forEach((corridor) => {
+    const path = new PIXI.Graphics();
+    path.moveTo(
+      (corridor.start.x + 0.5) * TILE_SIZE,
+      (corridor.start.y + 0.5) * TILE_SIZE,
+    );
+    path.lineTo(
+      (corridor.bend.x + 0.5) * TILE_SIZE,
+      (corridor.bend.y + 0.5) * TILE_SIZE,
+    );
+    path.lineTo(
+      (corridor.end.x + 0.5) * TILE_SIZE,
+      (corridor.end.y + 0.5) * TILE_SIZE,
+    );
+    path.stroke({ color: 0xffd166, width: 3, alpha: 0.9 });
+    debugLayer.addChild(path);
+  });
+
+  state.rooms.forEach((room, index) => {
+    const color = roomColors[index % roomColors.length];
+    const outline = new PIXI.Graphics();
+    outline.rect(
+      room.x * TILE_SIZE + 2,
+      room.y * TILE_SIZE + 2,
+      room.width * TILE_SIZE - 4,
+      room.height * TILE_SIZE - 4,
+    );
+    outline.fill({ color, alpha: 0.08 });
+    outline.stroke({ color, width: 2, alpha: 0.95 });
+    debugLayer.addChild(outline);
+
+    const label = new PIXI.Text({
+      text: `R${index + 1}`,
+      style: {
+        fill: color,
+        fontFamily: 'Consolas',
+        fontSize: 12,
+        fontWeight: 'bold',
+      },
+    });
+    label.x = room.x * TILE_SIZE + 5;
+    label.y = room.y * TILE_SIZE + 4;
+    debugLayer.addChild(label);
+  });
+}
+
 function renderPlayer() {
+  // 重建实体层中的宝箱、敌人和玩家精灵。
   actorLayer.removeChildren();
 
   state.chests.forEach((chest) => {
@@ -130,6 +188,8 @@ function updateHud() {
 // 应用后端返回的新状态，并刷新所有可视区域。
 function applyGameState(nextState) {
   state.map = nextState.map;
+  state.rooms = nextState.rooms;
+  state.corridors = nextState.corridors;
   state.player = nextState.player;
   state.enemies = nextState.enemies;
   state.chests = nextState.chests;
@@ -138,6 +198,7 @@ function applyGameState(nextState) {
   state.defeated = nextState.defeated;
   state.gold = nextState.gold;
   renderMap();
+  renderDebugLayer();
   renderPlayer();
   updateHud();
 }
@@ -170,7 +231,7 @@ async function main() {
   });
 
   document.querySelector('#game').appendChild(app.canvas);
-  board.addChild(mapLayer, actorLayer);
+  board.addChild(mapLayer, debugLayer, actorLayer);
   app.stage.addChild(board);
 
   // 加载地形、角色、敌人和宝箱贴图，后续渲染时复用纹理。
@@ -213,6 +274,20 @@ async function main() {
 
   // 同时支持方向键和 WASD 移动。
   window.addEventListener('keydown', (event) => {
+    if (event.key === 'F3') {
+      event.preventDefault();
+      debugVisible = !debugVisible;
+      renderDebugLayer();
+      document.querySelector('#debug-status').textContent = debugVisible
+        ? 'F3 调试层 开'
+        : 'F3 调试层 关';
+      console.table({
+        rooms: state.rooms,
+        corridors: state.corridors,
+      });
+      return;
+    }
+
     const moves = {
       ArrowUp: 'move_up',
       w: 'move_up',

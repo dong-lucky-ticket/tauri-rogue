@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tiles Dungeon Prototype</title>
-    <link rel="stylesheet" href="/src/styles.css">
+    <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
     <div id="game"></div>
@@ -22,7 +22,10 @@
           <button id="new-dungeon" type="button">新地牢</button>
         </div>
       </header>
-      <p class="hint">WASD / 方向键移动 · 宝箱自动开启 · 撞击哥布林攻击</p>
+      <p class="hint">
+        WASD / 方向键移动 · 宝箱自动开启 · 撞击哥布林攻击 ·
+        <span id="debug-status">F3 调试层 关</span>
+      </p>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
