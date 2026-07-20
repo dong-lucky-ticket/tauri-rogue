@@ -43,7 +43,11 @@ struct Corridor {
 // 游戏中的敌人实体。
 #[derive(Clone, Serialize)]
 struct Enemy {
+    // 敌人的稳定标识，用于前端在多个回合之间匹配同一个敌人。
+    id: u32,
+    // 敌人当前所在的网格坐标。
     position: Position,
+    // 敌人类型标识，后续可用于选择不同的 AI 和素材。
     kind: String,
 }
 
@@ -337,7 +341,9 @@ fn build_level(seed: u32, level: u32) -> GameState {
 
     let enemies = (0..3)
         .filter_map(|_| take_position())
-        .map(|position| Enemy {
+        .enumerate()
+        .map(|(id, position)| Enemy {
+            id: id as u32,
             position,
             kind: "goblin".to_string(),
         })
