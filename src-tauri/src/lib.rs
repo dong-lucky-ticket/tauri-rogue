@@ -39,7 +39,7 @@ struct Corridor {
     end: Position,
 }
 
-// 游戏中的敌人实体。当前原型使用 goblin 作为统一敌人类型。
+// 游戏中的敌人实体。
 #[derive(Clone, Serialize)]
 struct Enemy {
     position: Position,
@@ -53,6 +53,13 @@ struct Chest {
     opened: bool,
 }
 
+// 连接下一关的门户。只有清理完本关实体后才会激活。
+#[derive(Clone, Serialize)]
+struct Portal {
+    position: Position,
+    active: bool,
+}
+
 // 前后端共享的完整游戏状态。
 #[derive(Clone, Serialize)]
 struct GameState {
@@ -62,6 +69,8 @@ struct GameState {
     player: Position,
     enemies: Vec<Enemy>,
     chests: Vec<Chest>,
+    portal: Portal,
+    level: u32,
     seed: u32,
     moves: u32,
     defeated: u32,
@@ -81,7 +90,7 @@ fn seeded_random(seed: &mut u32) -> f32 {
 }
 
 // 生成房间、走廊和可放置实体的地板坐标。
-// 返回的 rooms 和 corridors 会随 GameState 发送到前端，用于 F3 调试层。
+// rooms 和 corridors 会随 GameState 发送到前端，用于 F3 调试层。
 fn create_map(
     seed: u32,
 ) -> (
@@ -152,7 +161,7 @@ fn create_map(
         y: first_room.y + first_room.height / 2,
     };
 
-    // 收集除出生点以外的所有地板格，供敌人和宝箱随机占用。
+    // 收集除出生点以外的所有地板格，供实体随机占用。
     let mut floor_positions = Vec::new();
     for y in 0..MAP_HEIGHT {
         for x in 0..MAP_WIDTH {
@@ -174,9 +183,13 @@ fn can_walk(map: &[Vec<bool>], x: isize, y: isize) -> bool {
         && map[y as usize][x as usize]
 }
 
-// 创建新地牢，初始化玩家、敌人、宝箱和调试元数据。
-#[tauri::command]
-fn new_dungeon(seed: u32, session: State<'_, Mutex<GameSession>>) -> GameState {
+// 根据实体处理结果更新门户激活状态。
+fn refresh_portal(state: &mut GameState) {
+    state.portal.active = state.enemies.is_empty() && state.chests.iter().all(|chest| chest.opened);
+}
+
+// 使用指定种子创建一个完整关卡。
+fn build_level(seed: u32, level: u32) -> GameState {
     let (map, player, mut floor_positions, rooms, corridors) = create_map(seed);
     let mut random_seed = seed.wrapping_add(7);
 
@@ -200,20 +213,31 @@ fn new_dungeon(seed: u32, session: State<'_, Mutex<GameSession>>) -> GameState {
             opened: false,
         })
         .collect();
+    let portal_position = take_position().unwrap_or(player);
 
-    let state = GameState {
+    GameState {
         map,
         rooms,
         corridors,
         player,
         enemies,
         chests,
+        portal: Portal {
+            position: portal_position,
+            active: false,
+        },
+        level,
         seed,
         moves: 0,
         defeated: 0,
         gold: 0,
-    };
+    }
+}
 
+// 创建新地牢，初始化第一关的游戏状态。
+#[tauri::command]
+fn new_dungeon(seed: u32, session: State<'_, Mutex<GameSession>>) -> GameState {
+    let state = build_level(seed, 1);
     session.lock().expect("game session lock poisoned").state = Some(state.clone());
     state
 }
@@ -273,7 +297,35 @@ fn player_action(
         }
     }
 
+    refresh_portal(state);
     Ok(state.clone())
+}
+
+// 进入已激活的门户后生成下一关，并继承累计金币和总击败数。
+#[tauri::command]
+fn next_level(session: State<'_, Mutex<GameSession>>) -> Result<GameState, String> {
+    let (current_seed, current_level, current_gold, current_defeated) = {
+        let session = session.lock().map_err(|_| "game session lock poisoned")?;
+        let state = session
+            .state
+            .as_ref()
+            .ok_or_else(|| "start a dungeon before entering the next level".to_string())?;
+        if !state.portal.active {
+            return Err("clear all enemies and open all chests first".to_string());
+        }
+        (state.seed, state.level, state.gold, state.defeated)
+    };
+
+    let next_seed = current_seed
+        .wrapping_add(0x9e37_79b9)
+        .wrapping_add(current_level.wrapping_mul(7_919));
+    let mut next_state = build_level(next_seed, current_level + 1);
+    next_state.gold = current_gold;
+    next_state.defeated = current_defeated;
+
+    let mut session = session.lock().map_err(|_| "game session lock poisoned")?;
+    session.state = Some(next_state.clone());
+    Ok(next_state)
 }
 
 // 创建 Tauri 应用、注册共享状态和前端可调用的命令。
@@ -282,7 +334,11 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Mutex::new(GameSession::default()))
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![new_dungeon, player_action])
+        .invoke_handler(tauri::generate_handler![
+            new_dungeon,
+            player_action,
+            next_level
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

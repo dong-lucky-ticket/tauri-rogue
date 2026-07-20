@@ -1,5 +1,7 @@
 import * as PIXI from 'pixi.js';
 import { invoke } from '@tauri-apps/api/core';
+
+// 地牢基础图块。
 import tileUrl from './assets/TilesDungeon/Tile.png';
 import wallUrl from './assets/TilesDungeon/Wall.png';
 import wallUpUrl from './assets/TilesDungeon/WallUp.png';
@@ -10,10 +12,13 @@ import corner1Url from './assets/TilesDungeon/Corner1.png';
 import corner2Url from './assets/TilesDungeon/Corner2.png';
 import corner3Url from './assets/TilesDungeon/Corner3.png';
 import corner4Url from './assets/TilesDungeon/Corner4.png';
+
+// 玩家、敌人、宝箱和关卡门户素材。
 import playerUrl from './assets/Dungeon Crawl Stone Soup Full/player/base/human_male.png';
 import enemyUrl from './assets/Dungeon Crawl Stone Soup Full/monster/goblin_new.png';
 import chestUrl from './assets/Dungeon Crawl Stone Soup Full/dungeon/chest.png';
 import chestOpenUrl from './assets/Dungeon Crawl Stone Soup Full/dungeon/chest_2_open.png';
+import portalUrl from './assets/Dungeon Crawl Stone Soup Full/dungeon/gateways/portal.png';
 
 // 地图尺寸与后端生成的地图保持一致。
 const TILE_SIZE = 32;
@@ -23,10 +28,13 @@ const BOARD_WIDTH = MAP_WIDTH * TILE_SIZE;
 const BOARD_HEIGHT = MAP_HEIGHT * TILE_SIZE;
 
 const app = new PIXI.Application();
+// 地图、调试信息和游戏实体分别放在独立容器中，便于控制渲染层级。
 const board = new PIXI.Container();
 const mapLayer = new PIXI.Container();
 const debugLayer = new PIXI.Container();
 const actorLayer = new PIXI.Container();
+let playerSprite = null;
+let portalSprite = null;
 
 // 前端缓存后端返回的完整游戏状态，只负责渲染和发送操作。
 const state = {
@@ -36,6 +44,11 @@ const state = {
   player: { x: 0, y: 0 },
   enemies: [],
   chests: [],
+  portal: {
+    position: { x: 0, y: 0 },
+    active: false,
+  },
+  level: 1,
   seed: 0,
   moves: 0,
   defeated: 0,
@@ -155,6 +168,8 @@ function renderDebugLayer() {
 function renderPlayer() {
   // 重建实体层中的宝箱、敌人和玩家精灵。
   actorLayer.removeChildren();
+  playerSprite = null;
+  portalSprite = null;
 
   state.chests.forEach((chest) => {
     const sprite = new PIXI.Sprite(chest.opened ? assets.chestOpen : assets.chest);
@@ -170,19 +185,32 @@ function renderPlayer() {
     actorLayer.addChild(sprite);
   });
 
-  const player = new PIXI.Sprite(assets.player);
-  player.x = state.player.x * TILE_SIZE;
-  player.y = state.player.y * TILE_SIZE;
-  actorLayer.addChild(player);
+  if (state.portal.active) {
+    portalSprite = new PIXI.Sprite(assets.portal);
+    portalSprite.anchor.set(0.5);
+    portalSprite.x = (state.portal.position.x + 0.5) * TILE_SIZE;
+    portalSprite.y = (state.portal.position.y + 0.5) * TILE_SIZE;
+    actorLayer.addChild(portalSprite);
+  }
+
+  playerSprite = new PIXI.Sprite(assets.player);
+  playerSprite.anchor.set(0.5);
+  playerSprite.x = (state.player.x + 0.5) * TILE_SIZE;
+  playerSprite.y = (state.player.y + 0.5) * TILE_SIZE;
+  actorLayer.addChild(playerSprite);
 }
 
 // 将游戏状态同步到 HUD 文本。
 function updateHud() {
   document.querySelector('#position').textContent = `位置 ${state.player.x}, ${state.player.y}`;
-  document.querySelector('#moves').textContent = `移动 ${state.moves}`;
+  document.querySelector('#moves').textContent = `回合 ${state.moves}`;
+  document.querySelector('#level').textContent = `关卡 ${state.level}`;
   document.querySelector('#seed').textContent = `种子 ${state.seed}`;
   document.querySelector('#defeated').textContent = `击败 ${state.defeated}`;
   document.querySelector('#gold').textContent = `金币 ${state.gold}`;
+  document.querySelector('#portal-status').textContent = state.portal.active
+    ? '门户已激活'
+    : '门户未激活';
 }
 
 // 应用后端返回的新状态，并刷新所有可视区域。
@@ -193,6 +221,8 @@ function applyGameState(nextState) {
   state.player = nextState.player;
   state.enemies = nextState.enemies;
   state.chests = nextState.chests;
+  state.portal = nextState.portal;
+  state.level = nextState.level;
   state.seed = nextState.seed;
   state.moves = nextState.moves;
   state.defeated = nextState.defeated;
@@ -215,7 +245,17 @@ async function movePlayer(action) {
 
   actionInFlight = true;
   try {
-    applyGameState(await invoke('player_action', { action }));
+    const nextState = await invoke('player_action', { action });
+    const enteredPortal =
+      nextState.portal.active &&
+      nextState.player.x === nextState.portal.position.x &&
+      nextState.player.y === nextState.portal.position.y;
+
+    if (enteredPortal) {
+      applyGameState(await invoke('next_level'));
+    } else {
+      applyGameState(nextState);
+    }
   } finally {
     actionInFlight = false;
   }
@@ -249,6 +289,7 @@ async function main() {
   assets.enemy = await PIXI.Assets.load(enemyUrl);
   assets.chest = await PIXI.Assets.load(chestUrl);
   assets.chestOpen = await PIXI.Assets.load(chestOpenUrl);
+  assets.portal = await PIXI.Assets.load(portalUrl);
 
   // 按顶部 HUD 以下的可用区域居中，小窗口允许缩小地图。
   const fitBoard = () => {
@@ -267,9 +308,24 @@ async function main() {
   fitBoard();
   await newDungeon();
 
-  // 让角色层产生轻微的呼吸效果。
+  // 使用轻微浮动、缩放和旋转，让静态玩家贴图呈现待机动画。
   app.ticker.add(() => {
-    actorLayer.alpha = 0.94 + Math.sin(app.ticker.lastTime / 180) * 0.06;
+    const time = app.ticker.lastTime;
+    actorLayer.alpha = 1;
+
+    if (playerSprite) {
+      const breathing = Math.sin(time / 180);
+      playerSprite.x = (state.player.x + 0.5) * TILE_SIZE;
+      playerSprite.y = (state.player.y + 0.5) * TILE_SIZE + breathing * 1.2;
+      playerSprite.scale.set(1 + breathing * 0.035, 1 - breathing * 0.025);
+      playerSprite.rotation = breathing * 0.025;
+    }
+
+    if (portalSprite) {
+      portalSprite.rotation = time / 900;
+      const pulse = 1 + Math.sin(time / 220) * 0.08;
+      portalSprite.scale.set(pulse);
+    }
   });
 
   // 同时支持方向键和 WASD 移动。

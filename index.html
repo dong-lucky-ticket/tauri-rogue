@@ -7,23 +7,30 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <!-- Pixi 画布会挂载到这个容器中。 -->
     <div id="game"></div>
+    <!-- HUD 覆盖在游戏画布上方，显示当前关卡和操作状态。 -->
     <div class="hud">
       <header class="topbar">
+        <!-- 左侧显示游戏名称和当前地图种子。 -->
         <div class="brand">
           <h1 class="title">Tiles Dungeon</h1>
           <span id="seed" class="seed">种子</span>
         </div>
+        <!-- 右侧显示玩家经常需要查看的状态。 -->
         <div class="stats">
           <span id="position" class="stat">位置</span>
+          <span id="level" class="stat">关卡</span>
           <span id="moves" class="stat">回合</span>
           <span id="defeated" class="stat">击败</span>
           <span id="gold" class="stat">金币</span>
           <button id="new-dungeon" type="button">新地牢</button>
         </div>
       </header>
+      <!-- 操作提示和开发期调试状态。 -->
       <p class="hint">
         WASD / 方向键移动 · 宝箱自动开启 · 撞击哥布林攻击 ·
+        <span id="portal-status">门户未激活</span> ·
         <span id="debug-status">F3 调试层 关</span>
       </p>
     </div>
