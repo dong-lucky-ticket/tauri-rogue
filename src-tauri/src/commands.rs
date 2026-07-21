@@ -20,21 +20,32 @@ pub struct GameSession {
 
 // 每关根据层数生成难度参数，避免所有关卡都使用同一套敌人数和补给量。
 struct DifficultyProfile {
+    // 本关类型，序列化后会发送给前端显示。
     floor_type: FloorType,
+    // 本关生成的敌人数量。
     enemy_count: usize,
+    // 本关其中多少个敌人为精英敌人。
     elite_enemy_count: usize,
+    // 本关生成的宝箱数量。
     chest_count: usize,
+    // 玩家最大生命值。
     max_hp: u32,
+    // 玩家不处于低血量时，单个宝箱成功回血的数值。
     chest_heal: u32,
+    // 玩家处于低血量时，单个宝箱成功回血的数值。
     low_hp_chest_heal: u32,
+    // 玩家不处于低血量时，宝箱触发回血的概率。
     chest_heal_chance: f32,
+    // 玩家处于低血量时，宝箱触发回血的概率。
     low_hp_chest_heal_chance: f32,
+    // 进入下一关时的固定恢复值。
     floor_clear_heal: u32,
 }
 
 // 难度曲线采用“敌人数量逐步增长，回复只做小幅补给”的方式。
 // 这样玩家不会每层满血重开，但也能通过探索和通关获得一定续航。
 fn difficulty_for_level(level: u32) -> DifficultyProfile {
+    // 精英层优先级高于补给层，例如第 15 关归类为精英层而不是补给层。
     let floor_type = if level > 1 && level % 5 == 0 {
         FloorType::Elite
     } else if level > 1 && level % 3 == 0 {
@@ -87,11 +98,14 @@ fn roll_chest_heal(
     chest_position: Position,
     difficulty: &DifficultyProfile,
 ) -> Option<u32> {
+    // 使用关卡种子和宝箱位置作为随机基础，再混入回合数，
+    // 让不同宝箱拥有不同结果，同时保持同一局可复现。
     let mut seed = state
         .seed
         .wrapping_add(state.moves.wrapping_mul(31))
         .wrapping_add((chest_position.x as u32).wrapping_mul(17))
         .wrapping_add((chest_position.y as u32).wrapping_mul(13));
+    // 小于等于最大生命一半时进入低血量规则。
     let low_hp = state.hp <= state.max_hp.div_ceil(2);
     let chance = if low_hp {
         difficulty.low_hp_chest_heal_chance
@@ -99,6 +113,7 @@ fn roll_chest_heal(
         difficulty.chest_heal_chance
     };
 
+    // 随机数小于概率阈值才返回回血数值，否则返回 None 表示本次没有回血。
     (seeded_random(&mut seed) < chance).then_some(if low_hp {
         difficulty.low_hp_chest_heal
     } else {
@@ -108,12 +123,14 @@ fn roll_chest_heal(
 
 // 使用指定种子创建一个完整关卡。
 fn build_level(seed: u32, level: u32) -> GameState {
+    // 地图生成本身不携带关卡难度，因此实体数量和生命值在这里叠加。
     let (map, player, mut floor_positions, rooms, corridors) = create_map(seed);
     let mut random_seed = seed.wrapping_add(7);
     let difficulty = difficulty_for_level(level);
 
     // 取出一个地板坐标后立即移除，避免多个实体重叠。
     let mut take_position = || {
+        // swap_remove 在取出位置后用末尾元素填补空位，适合只关心随机取值的场景。
         let index = (seeded_random(&mut random_seed) * floor_positions.len() as f32) as usize;
         Some(floor_positions.swap_remove(index.min(floor_positions.len() - 1)))
     };
@@ -122,6 +139,8 @@ fn build_level(seed: u32, level: u32) -> GameState {
         .filter_map(|_| take_position())
         .enumerate()
         .map(|(id, position)| {
+            // 当前实现按生成顺序把前 N 个敌人标记为精英。
+            // 因为位置已经随机化，所以不会总出现在固定地图位置。
             let elite = id < difficulty.elite_enemy_count;
             Enemy {
                 id: id as u32,
@@ -149,6 +168,7 @@ fn build_level(seed: u32, level: u32) -> GameState {
         })
         .collect();
     let portal_position = take_position().unwrap_or(player);
+    // 正常情况下地板位置足够，unwrap_or 是实体数量异常时的安全兜底。
 
     GameState {
         map,
@@ -179,6 +199,7 @@ fn build_level(seed: u32, level: u32) -> GameState {
 // 创建新地牢，初始化第一关的游戏状态。
 #[tauri::command]
 pub fn new_dungeon(seed: u32, session: State<'_, Mutex<GameSession>>) -> GameState {
+    // 新游戏从第一关开始，金币、击败数和血量都由 build_level 初始化。
     let state = build_level(seed, 1);
     session.lock().expect("game session lock poisoned").state = Some(state.clone());
     state
@@ -212,6 +233,7 @@ pub fn player_action(
         PlayerAction::MoveRight => (1, 0),
     };
 
+    // 用 isize 计算目标坐标，允许玩家在地图边缘尝试移动后由 can_walk 统一拦截。
     let next_x = state.player.x as isize + dx;
     let next_y = state.player.y as isize + dy;
 
@@ -219,6 +241,7 @@ pub fn player_action(
     state.moves += 1;
 
     if !can_walk(&state.map, next_x, next_y) {
+        // 撞墙也会消耗回合，因此敌人仍然有机会行动。
         state.last_event = "你撞到了墙。".to_string();
         plan_enemy_turn(state);
         return Ok(state.clone());
@@ -233,6 +256,8 @@ pub fn player_action(
     if let Some(enemy_index) = state.enemies.iter().position(|enemy| {
         enemy.position.x == next_position.x && enemy.position.y == next_position.y
     }) {
+        // 当前原型采用“走到敌人所在格即近战击败”的简化规则。
+        // 敌人的反击不会在同一个玩家动作中立刻执行，而是进入正式敌人回合。
         state.enemies.remove(enemy_index);
         state.defeated += 1;
         state.last_event = "你击败了一个哥布林。".to_string();
@@ -290,6 +315,7 @@ pub fn advance_turn_phase(session: State<'_, Mutex<GameSession>>) -> Result<Game
     match state.turn_phase {
         TurnPhase::PlayerInput => return Ok(state.clone()),
         TurnPhase::EnemyWarning => {
+            // 预警阶段只展示意图，推进后才会执行移动和攻击。
             if has_enemy_plan(state) {
                 execute_enemy_actions(state);
             } else {
@@ -297,15 +323,18 @@ pub fn advance_turn_phase(session: State<'_, Mutex<GameSession>>) -> Result<Game
             }
         }
         TurnPhase::EnemyAction => {
+            // 敌人动作结束后进入伤害结算阶段。
             resolve_enemy_damage(state);
         }
         TurnPhase::DamageResolution => {
+            // 给前端留出一帧阶段，用于展示受击结果，再进入动画收尾。
             state.turn_phase = TurnPhase::Animation;
             if !state.game_over {
                 state.last_event = "本回合动作已经结算完毕。".to_string();
             }
         }
         TurnPhase::Animation => {
+            // 清理敌人临时状态并把回合控制权还给玩家。
             finish_turn(state);
         }
     }
@@ -316,6 +345,7 @@ pub fn advance_turn_phase(session: State<'_, Mutex<GameSession>>) -> Result<Game
 // 进入已激活的门户后生成下一关，并继承累计金币和总击败数。
 #[tauri::command]
 pub fn next_level(session: State<'_, Mutex<GameSession>>) -> Result<GameState, String> {
+    // 先在短生命周期锁中读取旧关卡的跨关数据，避免生成地图时长期持有 Mutex。
     let (current_seed, current_level, current_gold, current_defeated, current_hp, current_max_hp) = {
         let session = session.lock().map_err(|_| "game session lock poisoned")?;
         let state = session
@@ -340,9 +370,12 @@ pub fn next_level(session: State<'_, Mutex<GameSession>>) -> Result<GameState, S
         .wrapping_add(current_level.wrapping_mul(7_919));
     let mut next_state = build_level(next_seed, current_level + 1);
     let next_difficulty = difficulty_for_level(current_level + 1);
+    // 金币和累计击败数跨关保留，地图、敌人、宝箱和门户则全部重新生成。
     next_state.gold = current_gold;
     next_state.defeated = current_defeated;
+    // 最大生命值不会因新关卡配置反而下降，只取历史上更高的上限。
     next_state.max_hp = current_max_hp.max(next_difficulty.max_hp);
+    // 只增加过关奖励的生命值，不把玩家直接恢复到满血。
     next_state.hp = (current_hp + next_difficulty.floor_clear_heal).min(next_state.max_hp);
     next_state.last_event = format!(
         "你进入了第 {} 关，并在转场时回复了 {} 点生命。",

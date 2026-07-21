@@ -11,6 +11,7 @@ import {
 } from './constants.js';
 
 // 将网格坐标转换为精灵中心点的像素坐标。
+// 实体精灵使用中心锚点，因此玩家和敌人都应通过该函数定位。
 export function gridCenter(position) {
   return {
     x: (position.x + 0.5) * TILE_SIZE,
@@ -19,14 +20,18 @@ export function gridCenter(position) {
 }
 
 function isFloor(ctx, x, y) {
+  // 统一判断坐标是否在地图范围内且为可行走地板。
+  // 墙体选择、地图绘制和调试渲染都依赖这个判断。
   return x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT && ctx.state.map[y][x];
 }
 
+// 计算两个网格位置之间的曼哈顿距离，用于判断敌人是否与玩家相邻。
 function manhattanDistance(a, b) {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
 function addSprite(ctx, texture, x, y) {
+  // 地图贴图采用左上角定位，而不是实体使用的中心点定位。
   const sprite = new PIXI.Sprite(texture);
   sprite.x = x * TILE_SIZE;
   sprite.y = y * TILE_SIZE;
@@ -34,6 +39,8 @@ function addSprite(ctx, texture, x, y) {
 }
 
 function pickWallTexture(ctx, x, y) {
+  // 墙体贴图根据四个方向的地板邻居选择朝向。
+  // 这样同一套墙体资源可以组合出边墙、转角和孤立墙块。
   const north = isFloor(ctx, x, y - 1);
   const south = isFloor(ctx, x, y + 1);
   const west = isFloor(ctx, x - 1, y);
@@ -51,6 +58,8 @@ function pickWallTexture(ctx, x, y) {
 }
 
 export function queueMovementAnimation(ctx, sprite, from, to, duration = 160) {
+  // 只记录动画数据，不立即移动精灵。
+  // ticker 会在每帧调用 getAnimatedPosition，按时间计算中间位置。
   if (!sprite || !from || (from.x === to.x && from.y === to.y)) return;
 
   ctx.collections.movementAnimations.set(sprite, {
@@ -62,11 +71,13 @@ export function queueMovementAnimation(ctx, sprite, from, to, duration = 160) {
 }
 
 export function getAnimatedPosition(ctx, sprite, target) {
+  // 没有动画记录时直接返回目标位置，保证首次创建精灵可以立即显示。
   const targetPixels = gridCenter(target);
   const animation = ctx.collections.movementAnimations.get(sprite);
   if (!animation) return targetPixels;
 
   const progress = Math.min(1, (performance.now() - animation.start) / animation.duration);
+  // 使用 cubic-out 缓动，让移动开始较快、结束较平滑。
   const eased = 1 - (1 - progress) ** 3;
   const position = {
     x: animation.from.x + (animation.to.x - animation.from.x) * eased,
@@ -78,8 +89,11 @@ export function getAnimatedPosition(ctx, sprite, target) {
 }
 
 export function renderMap(ctx) {
+  // 地图状态变化后完整重建地图层。
+  // 当前地图尺寸较小，重建比维护大量旧精灵更直观可靠。
   ctx.mapLayer.removeChildren();
 
+  // 第一遍绘制所有地板，保证墙体不会覆盖地板。
   for (let y = 0; y < MAP_HEIGHT; y += 1) {
     for (let x = 0; x < MAP_WIDTH; x += 1) {
       if (isFloor(ctx, x, y)) addSprite(ctx, ctx.assets.tile, x, y);
@@ -101,6 +115,7 @@ export function renderMap(ctx) {
 }
 
 export function renderDebugLayer(ctx) {
+  // F3 调试层不参与游戏规则，只显示后端生成的房间和走廊结构。
   ctx.debugLayer.removeChildren();
   ctx.debugLayer.visible = ctx.flags.debugVisible;
   if (!ctx.flags.debugVisible) return;
@@ -108,6 +123,7 @@ export function renderDebugLayer(ctx) {
   const roomColors = [0x5ee7ff, 0xff8fab, 0xb8f2a2, 0xffd166];
 
   ctx.state.corridors.forEach((corridor) => {
+    // 走廊按照后端保存的 start -> bend -> end 路径绘制。
     const path = new PIXI.Graphics();
     path.moveTo((corridor.start.x + 0.5) * TILE_SIZE, (corridor.start.y + 0.5) * TILE_SIZE);
     path.lineTo((corridor.bend.x + 0.5) * TILE_SIZE, (corridor.bend.y + 0.5) * TILE_SIZE);
@@ -117,6 +133,7 @@ export function renderDebugLayer(ctx) {
   });
 
   ctx.state.rooms.forEach((room, index) => {
+    // 房间使用循环颜色区分，便于观察房间重叠和连接关系。
     const color = roomColors[index % roomColors.length];
     const outline = new PIXI.Graphics();
     outline.rect(
@@ -145,6 +162,7 @@ export function renderDebugLayer(ctx) {
 }
 
 export function renderIntentLayer(ctx) {
+  // F4 调试层展示敌人的本回合意图，而不是敌人当前已经完成的动作。
   ctx.intentLayer.removeChildren();
   if (!ctx.flags.turnDebugVisible) return;
   if (ctx.state.turnPhase !== 'enemy_warning' && ctx.state.turnPhase !== 'enemy_action') return;
@@ -156,6 +174,7 @@ export function renderIntentLayer(ctx) {
     const to = gridCenter(enemy.intent.target);
 
     if (enemy.intent.kind === 'move') {
+      // 移动意图同时显示目标格描边、连线和箭头，帮助确认 BFS 结果。
       const overlay = new PIXI.Graphics();
       overlay.rect(
         enemy.intent.target.x * TILE_SIZE + 2,
@@ -184,6 +203,7 @@ export function renderIntentLayer(ctx) {
     }
 
     if (enemy.intent.kind === 'attack') {
+      // 攻击意图显示玩家目标格、攻击连线和范围圆。
       const overlay = new PIXI.Graphics();
       overlay.circle(to.x, to.y, TILE_SIZE * 0.34);
       overlay.fill({ color: 0xff6f61, alpha: 0.16 });
@@ -197,6 +217,7 @@ export function renderIntentLayer(ctx) {
 }
 
 export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
+  // 实体层每次状态同步时重建，确保宝箱开关、敌人增删和门户状态一致。
   ctx.actorLayer.removeChildren();
   ctx.collections.enemySprites.clear();
   ctx.collections.warningSprites.clear();
@@ -205,6 +226,7 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
   ctx.refs.portalSprite = null;
 
   ctx.state.chests.forEach((chest) => {
+    // 宝箱只通过 opened 状态切换开箱前后贴图，奖励结算由 Rust 完成。
     const sprite = new PIXI.Sprite(chest.opened ? ctx.assets.chestOpen : ctx.assets.chest);
     sprite.x = chest.position.x * TILE_SIZE;
     sprite.y = chest.position.y * TILE_SIZE;
@@ -212,6 +234,7 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
   });
 
   ctx.state.enemies.forEach((enemy) => {
+    // 当前普通敌人和精英敌人复用同一张贴图，精英属性由缩放和 tint 区分。
     const sprite = new PIXI.Sprite(ctx.assets.enemy);
     sprite.anchor.set(0.5);
     if (enemy.elite) {
@@ -220,6 +243,7 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
       sprite.tint = 0xd66b5d;
     }
     const previousEnemy = previousEnemies.find((item) => item.id === enemy.id);
+    // 有旧位置时从旧位置开始播放移动，否则直接出现在当前格。
     const position = previousEnemy ? gridCenter(previousEnemy.position) : gridCenter(enemy.position);
     sprite.x = position.x;
     sprite.y = position.y;
@@ -227,6 +251,7 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
       enemy.intent?.kind === 'attack' || manhattanDistance(enemy.position, ctx.state.player) === 1;
 
     if (ctx.flags.turnDebugVisible && enemy.intent?.kind === 'attack') {
+      // 调试模式下用颜色区分攻击中的敌人。
       sprite.tint = 0xff8d7b;
     } else if (
       ctx.flags.turnDebugVisible &&
@@ -239,6 +264,7 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
     ctx.actorLayer.addChild(sprite);
 
     if (ctx.flags.turnDebugVisible && enemyIsThreatening) {
+      // 感叹号只在 F4 调试模式显示，正常游戏通过短暂飘字提示攻击预警。
       const warning = new PIXI.Text({
         text: '!',
         style: {
@@ -258,6 +284,7 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
   });
 
   if (ctx.state.portal.active) {
+    // 门户未激活时不创建精灵，避免玩家误以为可以提前进入下一关。
     ctx.refs.portalSprite = new PIXI.Sprite(ctx.assets.portal);
     ctx.refs.portalSprite.anchor.set(0.5);
     ctx.refs.portalSprite.x = (ctx.state.portal.position.x + 0.5) * TILE_SIZE;
@@ -287,6 +314,8 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
 }
 
 export function updateHud(ctx) {
+  // HUD 只读取前端状态，不参与规则计算。
+  // 所有文本更新集中在这里，避免不同流程各自修改 DOM 造成显示不一致。
   const healthElement = document.querySelector('#health');
   document.querySelector('#phase').hidden = !ctx.flags.turnDebugVisible;
   document.querySelector('#position').textContent = `位置 ${ctx.state.player.x}, ${ctx.state.player.y}`;
@@ -312,6 +341,7 @@ export function updateHud(ctx) {
 }
 
 export function showDamageFeedback(ctx) {
+  // 通过移除再添加 class 强制重启动画，即使连续受击也能看到每次闪光。
   const flash = document.querySelector('#damage-flash');
   flash.classList.remove('active');
   void flash.offsetWidth;
@@ -320,6 +350,7 @@ export function showDamageFeedback(ctx) {
 }
 
 export function spawnDamageText(ctx, position, text, color = 0xffd166) {
+  // 在 effectLayer 创建一次性飘字，并交给统一特效循环清理。
   const label = new PIXI.Text({
     text,
     style: {
@@ -345,6 +376,7 @@ export function spawnDamageText(ctx, position, text, color = 0xffd166) {
 }
 
 export function spawnAttackEffect(ctx, from, target) {
+  // 玩家攻击使用两条错位线段模拟近战挥击。
   const start = gridCenter(from);
   const end = gridCenter(target);
   const slash = new PIXI.Graphics();
@@ -364,6 +396,7 @@ export function spawnAttackEffect(ctx, from, target) {
 }
 
 export function spawnEnemyAttackEffect(ctx, from, target) {
+  // 敌人攻击由攻击轨迹和目标格冲击标记组成。
   const start = gridCenter(from);
   const end = gridCenter(target);
   const attack = new PIXI.Container();
@@ -394,6 +427,7 @@ export function spawnEnemyAttackEffect(ctx, from, target) {
 }
 
 export function spawnEnemyDeathEffect(ctx, position, source) {
+  // 敌人从 actorLayer 消失后，在 effectLayer 保留一个短暂死亡残影。
   const center = gridCenter(position);
   const sprite = new PIXI.Sprite(ctx.assets.enemy);
   sprite.anchor.set(0.5);
@@ -418,6 +452,7 @@ export function spawnEnemyDeathEffect(ctx, position, source) {
 }
 
 export function spawnEnemyWarningEffects(ctx, gameState) {
+  // 正常模式不显示完整调试覆盖层，因此使用感叹号飘字提示即将攻击。
   gameState.enemies.forEach((enemy) => {
     if (enemy.intent?.kind === 'attack' && !ctx.flags.turnDebugVisible) {
       spawnDamageText(ctx, enemy.position, '!', 0xff6f61);
@@ -426,6 +461,7 @@ export function spawnEnemyWarningEffects(ctx, gameState) {
 }
 
 export function spawnEnemyActionEffects(ctx, gameState) {
+  // EnemyAction 阶段为每个攻击意图生成一次攻击轨迹。
   gameState.enemies.forEach((enemy) => {
     if (enemy.intent?.kind === 'attack') {
       spawnEnemyAttackEffect(ctx, enemy.position, gameState.player);
@@ -434,9 +470,12 @@ export function spawnEnemyActionEffects(ctx, gameState) {
 }
 
 export function updateVisualEffects(ctx, now) {
+  // 每帧更新并清理所有临时特效。
+  // 特效只保存必要的起始时间和基准位置，不把动画状态写回 GameState。
   for (let index = ctx.collections.visualEffects.length - 1; index >= 0; index -= 1) {
     const effect = ctx.collections.visualEffects[index];
     const progress = Math.min(1, (now - effect.start) / effect.duration);
+    // 所有特效默认逐渐淡出，具体类型再叠加位移、旋转或缩放。
     effect.display.alpha = 1 - progress;
 
     if (effect.kind === 'damage-text') {
@@ -466,29 +505,35 @@ export function updateVisualEffects(ctx, now) {
 }
 
 export function mountApp(ctx) {
+  // 将各渲染层按底到顶的顺序挂载：
+  // 地图、地图调试、实体、敌人意图、临时特效。
   document.querySelector('#game').appendChild(ctx.app.canvas);
   ctx.board.addChild(ctx.mapLayer, ctx.debugLayer, ctx.actorLayer, ctx.intentLayer, ctx.effectLayer);
   ctx.app.stage.addChild(ctx.board);
 }
 
 export function fitBoard(ctx) {
+  // HUD 占据窗口上方空间，地图只能在剩余区域内缩放和垂直居中。
   const topbarRect = document.querySelector('.topbar').getBoundingClientRect();
   const hintRect = document.querySelector('.hint').getBoundingClientRect();
   const hudBottom = Math.max(topbarRect.bottom, hintRect.bottom) + 12;
   const availableHeight = Math.max(1, window.innerHeight - hudBottom);
   const scale = Math.min(1, window.innerWidth / BOARD_WIDTH, availableHeight / BOARD_HEIGHT);
 
+  // board 使用统一缩放，避免地图内部各层出现不同尺寸。
   ctx.board.scale.set(scale);
   ctx.board.x = Math.floor((window.innerWidth - BOARD_WIDTH * scale) / 2);
   ctx.board.y = Math.floor(hudBottom + (availableHeight - BOARD_HEIGHT * scale) / 2);
 }
 
 export function startTicker(ctx) {
+  // ticker 是前端唯一的逐帧循环，负责呼吸、阶段动作、门户脉冲和临时特效。
   ctx.app.ticker.add(() => {
     const time = ctx.app.ticker.lastTime;
     ctx.actorLayer.alpha = 1;
 
     if (ctx.refs.playerSprite) {
+      // 玩家使用轻微上下浮动和缩放模拟“看起来会动”的待机动画。
       const breathing = Math.sin(time / 180);
       const position = getAnimatedPosition(ctx, ctx.refs.playerSprite, ctx.state.player);
       ctx.refs.playerSprite.x = position.x;
@@ -510,6 +555,7 @@ export function startTicker(ctx) {
       let scaleY = 1;
 
       if (enemy.mode === 'alert' && enemy.intent?.target) {
+        // alert：向目标格轻微前倾，表达准备移动。
         const target = gridCenter(enemy.intent.target);
         offsetX = (target.x - position.x) * 0.1;
         offsetY += (target.y - position.y) * 0.1;
@@ -518,6 +564,7 @@ export function startTicker(ctx) {
       }
 
       if (enemy.mode === 'windup' && enemy.intent?.target) {
+        // windup：向远离玩家方向蓄力，并加入轻微抖动。
         const target = gridCenter(enemy.intent.target);
         offsetX = (position.x - target.x) * 0.08;
         offsetY += (position.y - target.y) * 0.08;
@@ -527,6 +574,7 @@ export function startTicker(ctx) {
       }
 
       if (enemy.mode === 'attack' && enemy.intent?.target) {
+        // attack：向玩家方向前冲，动作幅度大于预警和蓄力阶段。
         const target = gridCenter(enemy.intent.target);
         offsetX = (target.x - position.x) * 0.22;
         offsetY += (target.y - position.y) * 0.22;
@@ -542,6 +590,7 @@ export function startTicker(ctx) {
     });
 
     ctx.collections.warningSprites.forEach((warning, enemyId) => {
+      // 感叹号跟随敌人精灵，而不是固定在原始网格位置。
       const sprite = ctx.collections.enemySprites.get(enemyId);
       if (!sprite) return;
       const pulse = 1 + Math.sin(time / 110) * 0.12;
@@ -552,6 +601,7 @@ export function startTicker(ctx) {
     });
 
     if (ctx.refs.portalSprite) {
+      // 门户使用持续旋转和缩放脉冲表达“已经可以进入”。
       ctx.refs.portalSprite.rotation = time / 900;
       const pulse = 1 + Math.sin(time / 220) * 0.08;
       ctx.refs.portalSprite.scale.set(pulse);
@@ -560,3 +610,4 @@ export function startTicker(ctx) {
     updateVisualEffects(ctx, performance.now());
   });
 }
+  // 第二遍只绘制紧邻地板的墙体，避免在地图外圈生成无意义的墙。
