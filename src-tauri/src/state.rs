@@ -24,6 +24,15 @@ pub enum TurnPhase {
     Animation,
 }
 
+// 关卡类型决定本关的敌人配置、宝箱数量和回复强度。
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FloorType {
+    Standard,
+    Supply,
+    Elite,
+}
+
 // 敌人的简化状态机，用于表达当前是在待机、追击还是准备攻击。
 // `Hit` 和 `Dead` 已为后续受击硬直、死亡演出预留，因此暂时允许未被完整使用。
 #[allow(dead_code)]
@@ -91,6 +100,10 @@ pub struct Enemy {
     pub mode: EnemyMode,
     // 敌人在本回合已经规划好的动作意图。
     pub intent: EnemyIntent,
+    // 精英敌人会造成更高伤害，避免精英层只是增加普通敌人数量。
+    pub damage: u32,
+    // 是否为精英敌人，前端可据此使用更醒目的渲染表现。
+    pub elite: bool,
 }
 
 // 游戏中的宝箱实体。
@@ -126,6 +139,8 @@ pub struct GameState {
     pub portal: Portal,
     // 当前关卡编号，从第一关开始递增。
     pub level: u32,
+    // 当前关卡类型，用于前端展示本关的玩法重点。
+    pub floor_type: FloorType,
     // 当前关卡使用的随机种子，可用于复现地图。
     pub seed: u32,
     // 玩家已经执行的行动次数，撞墙也会消耗一次行动。

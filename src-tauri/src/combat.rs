@@ -200,13 +200,25 @@ pub fn execute_enemy_actions(state: &mut GameState) {
         }
     }
 
-    state.pending_damage = attack_count;
+    // 普通敌人造成 1 点伤害，精英敌人造成 2 点伤害。
+    state.pending_damage = state
+        .enemies
+        .iter()
+        .filter(|enemy| enemy.intent.kind == EnemyIntentKind::Attack)
+        .map(|enemy| enemy.damage)
+        .sum();
     state.turn_phase = TurnPhase::EnemyAction;
 
     if attack_count > 0 && moved_count > 0 {
-        state.last_event = format!("哥布林完成包围，{attack_count} 次攻击即将命中。");
+        state.last_event = format!(
+            "敌人完成包围，{attack_count} 次攻击即将命中，共造成 {} 点伤害。",
+            state.pending_damage
+        );
     } else if attack_count > 0 {
-        state.last_event = format!("哥布林发起了 {attack_count} 次攻击。");
+        state.last_event = format!(
+            "敌人发起了 {attack_count} 次攻击，共造成 {} 点伤害。",
+            state.pending_damage
+        );
     } else if moved_count > 0 {
         state.last_event = format!("{moved_count} 个哥布林完成了移动。");
     }

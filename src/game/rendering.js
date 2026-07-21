@@ -3,6 +3,7 @@ import * as PIXI from 'pixi.js';
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  FLOOR_TYPE_LABELS,
   MAP_HEIGHT,
   MAP_WIDTH,
   PHASE_LABELS,
@@ -213,6 +214,11 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
   ctx.state.enemies.forEach((enemy) => {
     const sprite = new PIXI.Sprite(ctx.assets.enemy);
     sprite.anchor.set(0.5);
+    if (enemy.elite) {
+      // 精英敌人复用现有哥布林素材，通过尺寸和色调区分威胁等级。
+      sprite.scale.set(1.14);
+      sprite.tint = 0xd66b5d;
+    }
     const previousEnemy = previousEnemies.find((item) => item.id === enemy.id);
     const position = previousEnemy ? gridCenter(previousEnemy.position) : gridCenter(enemy.position);
     sprite.x = position.x;
@@ -286,6 +292,8 @@ export function updateHud(ctx) {
   document.querySelector('#position').textContent = `位置 ${ctx.state.player.x}, ${ctx.state.player.y}`;
   document.querySelector('#moves').textContent = `回合 ${ctx.state.moves}`;
   document.querySelector('#level').textContent = `关卡 ${ctx.state.level}`;
+  document.querySelector('#floor-type').textContent =
+    FLOOR_TYPE_LABELS[ctx.state.floorType] ?? '未知层';
   document.querySelector('#phase').textContent = `阶段 ${PHASE_LABELS[ctx.state.turnPhase] ?? '进行中'}`;
   healthElement.textContent = `生命 ${ctx.state.hp}/${ctx.state.maxHp}`;
   healthElement.classList.toggle('health-warning', ctx.state.hp <= Math.ceil(ctx.state.maxHp / 2));

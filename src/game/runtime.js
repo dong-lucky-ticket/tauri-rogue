@@ -45,6 +45,7 @@ export function applyGameState(ctx, nextState, options = {}) {
   ctx.state.gold = nextState.gold;
   ctx.state.turnPhase = nextState.turn_phase;
   ctx.state.pendingDamage = nextState.pending_damage;
+  ctx.state.floorType = nextState.floor_type;
   ctx.state.hp = nextState.hp;
   ctx.state.maxHp = nextState.max_hp;
   ctx.state.gameOver = nextState.game_over;

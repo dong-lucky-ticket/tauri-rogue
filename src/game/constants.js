@@ -21,6 +21,12 @@ export const PHASE_DELAYS = {
   animation: 70,
 };
 
+export const FLOOR_TYPE_LABELS = {
+  standard: '普通层',
+  supply: '补给层',
+  elite: '精英层',
+};
+
 export const INITIAL_STATE = {
   map: [],
   rooms: [],
@@ -33,6 +39,7 @@ export const INITIAL_STATE = {
     active: false,
   },
   level: 1,
+  floorType: 'standard',
   seed: 0,
   moves: 0,
   defeated: 0,
