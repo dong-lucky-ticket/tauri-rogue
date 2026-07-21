@@ -33,6 +33,7 @@ const board = new PIXI.Container();
 const mapLayer = new PIXI.Container();
 const debugLayer = new PIXI.Container();
 const actorLayer = new PIXI.Container();
+const intentLayer = new PIXI.Container();
 const effectLayer = new PIXI.Container();
 let playerSprite = null;
 let portalSprite = null;
@@ -73,6 +74,10 @@ let actionInFlight = false;
 // 记录受击反馈结束时间，用于让玩家精灵短暂闪烁。
 let damageFeedbackUntil = 0;
 let phaseAdvanceInFlight = false;
+// 限制长按方向键时的重复触发频率，避免移动过快影响操作手感。
+let lastMoveInputAt = 0;
+
+const MOVE_REPEAT_INTERVAL_MS = 120;
 
 const PHASE_LABELS = {
   player_input: '玩家行动',
@@ -234,6 +239,59 @@ function renderDebugLayer() {
     label.x = room.x * TILE_SIZE + 5;
     label.y = room.y * TILE_SIZE + 4;
     debugLayer.addChild(label);
+  });
+}
+
+// 在 F4 回合调试模式下持续绘制敌人意图，避免预告一闪而过难以观察。
+function renderIntentLayer() {
+  intentLayer.removeChildren();
+  if (!turnDebugVisible) return;
+  if (state.turnPhase !== 'enemy_warning' && state.turnPhase !== 'enemy_action') return;
+
+  state.enemies.forEach((enemy) => {
+    if (!enemy.intent?.target) return;
+
+    const from = gridCenter(enemy.position);
+    const to = gridCenter(enemy.intent.target);
+
+    if (enemy.intent.kind === 'move') {
+      const overlay = new PIXI.Graphics();
+      overlay.rect(
+        enemy.intent.target.x * TILE_SIZE + 2,
+        enemy.intent.target.y * TILE_SIZE + 2,
+        TILE_SIZE - 4,
+        TILE_SIZE - 4,
+      );
+      overlay.fill({ color: 0xf0bd73, alpha: 0.16 });
+      overlay.stroke({ color: 0xf0bd73, width: 3, alpha: 0.98 });
+      overlay.moveTo(from.x, from.y);
+      overlay.lineTo(to.x, to.y);
+      overlay.stroke({ color: 0xffe0a6, width: 3, alpha: 0.92 });
+
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const length = Math.max(1, Math.hypot(dx, dy));
+      const ux = dx / length;
+      const uy = dy / length;
+      const arrowSize = 8;
+      overlay.moveTo(to.x, to.y);
+      overlay.lineTo(to.x - ux * arrowSize - uy * 5, to.y - uy * arrowSize + ux * 5);
+      overlay.moveTo(to.x, to.y);
+      overlay.lineTo(to.x - ux * arrowSize + uy * 5, to.y - uy * arrowSize - ux * 5);
+      overlay.stroke({ color: 0xffe0a6, width: 3, alpha: 0.98 });
+      intentLayer.addChild(overlay);
+    }
+
+    if (enemy.intent.kind === 'attack') {
+      const overlay = new PIXI.Graphics();
+      overlay.circle(to.x, to.y, TILE_SIZE * 0.34);
+      overlay.fill({ color: 0xff6f61, alpha: 0.16 });
+      overlay.stroke({ color: 0xff6f61, width: 3, alpha: 0.98 });
+      overlay.moveTo(from.x, from.y);
+      overlay.lineTo(to.x, to.y);
+      overlay.stroke({ color: 0xff8d7b, width: 3, alpha: 0.88 });
+      intentLayer.addChild(overlay);
+    }
   });
 }
 
@@ -399,6 +457,104 @@ function spawnAttackEffect(from, target) {
   });
 }
 
+// 在敌人预警阶段显示移动箭头和目标格高亮，让玩家更容易看懂追击路径。
+function spawnMoveWarningEffect(from, target) {
+  const start = gridCenter(from);
+  const end = gridCenter(target);
+  const marker = new PIXI.Graphics();
+  marker.rect(target.x * TILE_SIZE + 3, target.y * TILE_SIZE + 3, TILE_SIZE - 6, TILE_SIZE - 6);
+  marker.stroke({ color: 0xf0bd73, width: 2, alpha: 0.95 });
+  marker.moveTo(start.x, start.y);
+  marker.lineTo(end.x, end.y);
+  marker.stroke({ color: 0xf0bd73, width: 2, alpha: 0.9 });
+  marker.moveTo(end.x, end.y);
+  marker.lineTo(end.x - 5, end.y - 3);
+  marker.moveTo(end.x, end.y);
+  marker.lineTo(end.x - 3, end.y - 5);
+  marker.stroke({ color: 0xffe0a6, width: 2, alpha: 0.95 });
+  effectLayer.addChild(marker);
+  visualEffects.push({
+    display: marker,
+    kind: 'warning',
+    start: performance.now(),
+    duration: 260,
+  });
+}
+
+// 敌人攻击动作使用向玩家方向的挥击弧线，而不是只在结算阶段显示扣血。
+function spawnEnemyAttackEffect(from, target) {
+  const start = gridCenter(from);
+  const end = gridCenter(target);
+  const attack = new PIXI.Container();
+  const trail = new PIXI.Graphics();
+  trail.moveTo(start.x, start.y);
+  trail.lineTo(end.x, end.y);
+  trail.stroke({ color: 0xff8d7b, width: 6, alpha: 0.88 });
+  attack.addChild(trail);
+
+  const impact = new PIXI.Graphics();
+  impact.circle(end.x, end.y, TILE_SIZE * 0.18);
+  impact.fill({ color: 0xffd4c7, alpha: 0.95 });
+  impact.stroke({ color: 0xff6f61, width: 4, alpha: 0.98 });
+  impact.moveTo(end.x - 10, end.y - 10);
+  impact.lineTo(end.x + 10, end.y + 10);
+  impact.moveTo(end.x + 10, end.y - 10);
+  impact.lineTo(end.x - 10, end.y + 10);
+  impact.stroke({ color: 0xfff1d0, width: 3, alpha: 0.95 });
+  attack.addChild(impact);
+
+  effectLayer.addChild(attack);
+  visualEffects.push({
+    display: attack,
+    kind: 'enemy-attack',
+    start: performance.now(),
+    duration: 320,
+  });
+}
+
+// 生成敌人的受击硬直和死亡停留效果，让其不会瞬间从地图上消失。
+function spawnEnemyDeathEffect(position, source) {
+  const center = gridCenter(position);
+  const sprite = new PIXI.Sprite(assets.enemy);
+  sprite.anchor.set(0.5);
+  sprite.x = center.x;
+  sprite.y = center.y;
+  sprite.tint = 0xffc7ba;
+  effectLayer.addChild(sprite);
+
+  const dx = position.x - source.x;
+  const dy = position.y - source.y;
+  const length = Math.max(1, Math.hypot(dx, dy));
+  visualEffects.push({
+    display: sprite,
+    kind: 'enemy-death',
+    start: performance.now(),
+    duration: 520,
+    baseX: center.x,
+    baseY: center.y,
+    pushX: (dx / length) * 8,
+    pushY: (dy / length) * 8,
+  });
+}
+
+// 根据敌人的当前意图，生成预警阶段的攻击提示。
+function spawnEnemyWarningEffects(gameState) {
+  gameState.enemies.forEach((enemy) => {
+    if (enemy.intent?.kind === 'attack' && !turnDebugVisible) {
+      spawnDamageText(enemy.position, '!', 0xff6f61);
+    }
+  });
+}
+
+// 敌人执行动作阶段时，播放真正的攻击动作表现。
+function spawnEnemyActionEffects(gameState) {
+  gameState.enemies.forEach((enemy) => {
+    if (enemy.intent?.kind === 'attack') {
+      spawnEnemyAttackEffect(enemy.position, gameState.player);
+    }
+  });
+}
+
 // 更新伤害数字和斩击线的淡出、上浮与缩放效果。
 function updateVisualEffects(now) {
   for (let index = visualEffects.length - 1; index >= 0; index -= 1) {
@@ -408,6 +564,21 @@ function updateVisualEffects(now) {
 
     if (effect.kind === 'damage-text') {
       effect.display.y = effect.baseY - progress * 22;
+    } else if (effect.kind === 'enemy-death') {
+      const hold = Math.min(1, progress / 0.45);
+      effect.display.x = effect.baseX + effect.pushX * hold;
+      effect.display.y = effect.baseY + effect.pushY * hold + progress * 5;
+      effect.display.rotation = hold * 0.55;
+      if (progress < 0.22) {
+        effect.display.tint = 0xffffff;
+      } else if (progress < 0.5) {
+        effect.display.tint = 0xff9b8a;
+      } else {
+        effect.display.tint = 0x6b4d4a;
+      }
+    } else if (effect.kind === 'warning') {
+      const pulse = 1 + Math.sin(progress * Math.PI) * 0.08;
+      effect.display.scale.set(pulse);
     } else {
       const scale = 0.7 + progress * 0.5;
       effect.display.scale.set(scale);
@@ -427,6 +598,7 @@ function applyGameState(nextState, options = {}) {
     id: enemy.id,
     position: { ...enemy.position },
   }));
+  const previousTurnPhase = state.turnPhase;
   const damageTaken = Math.max(0, state.hp - nextState.hp);
   const defeatedEnemy = previousEnemies.find(
     (enemy) => !nextState.enemies.some((nextEnemy) => nextEnemy.id === enemy.id),
@@ -455,11 +627,19 @@ function applyGameState(nextState, options = {}) {
     !options.skipEffects && previousEnemies.length > 0 ? previousPlayer : null,
     !options.skipEffects ? previousEnemies : [],
   );
+  renderIntentLayer();
   updateHud();
 
   if (!options.skipEffects) {
+    if (previousTurnPhase !== nextState.turn_phase && nextState.turn_phase === 'enemy_warning') {
+      spawnEnemyWarningEffects(nextState);
+    }
+    if (previousTurnPhase !== nextState.turn_phase && nextState.turn_phase === 'enemy_action') {
+      spawnEnemyActionEffects(nextState);
+    }
     if (defeatedEnemy) {
       spawnAttackEffect(previousPlayer, defeatedEnemy.position);
+      spawnEnemyDeathEffect(defeatedEnemy.position, previousPlayer);
       spawnDamageText(defeatedEnemy.position, '击败', 0xffd166);
     }
     if (damageTaken > 0) {
@@ -488,8 +668,12 @@ async function resolveTurnPhases() {
         applyGameState(await invoke('advance_turn_phase'));
       } else {
         let nextState = await invoke('advance_turn_phase');
+        if (nextState.turn_phase === 'enemy_warning') spawnEnemyWarningEffects(nextState);
+        if (nextState.turn_phase === 'enemy_action') spawnEnemyActionEffects(nextState);
         while (nextState.turn_phase !== 'player_input' && !nextState.game_over) {
           nextState = await invoke('advance_turn_phase');
+          if (nextState.turn_phase === 'enemy_warning') spawnEnemyWarningEffects(nextState);
+          if (nextState.turn_phase === 'enemy_action') spawnEnemyActionEffects(nextState);
         }
         applyGameState(nextState);
       }
@@ -538,7 +722,7 @@ async function main() {
   });
 
   document.querySelector('#game').appendChild(app.canvas);
-  board.addChild(mapLayer, debugLayer, actorLayer, effectLayer);
+  board.addChild(mapLayer, debugLayer, actorLayer, intentLayer, effectLayer);
   app.stage.addChild(board);
 
   // 加载地形、角色、敌人和宝箱贴图，后续渲染时复用纹理。
@@ -595,8 +779,42 @@ async function main() {
       if (!sprite) return;
       const position = getAnimatedPosition(sprite, enemy.position);
       const breathing = Math.sin(time / 230 + enemy.id);
-      sprite.x = position.x;
-      sprite.y = position.y + breathing * 0.5;
+      let offsetX = 0;
+      let offsetY = breathing * 0.5;
+      let rotation = 0;
+      let scaleX = 1;
+      let scaleY = 1;
+
+      if (enemy.mode === 'alert' && enemy.intent?.target) {
+        const target = gridCenter(enemy.intent.target);
+        offsetX = (target.x - position.x) * 0.1;
+        offsetY += (target.y - position.y) * 0.1;
+        scaleX = 1.03;
+        scaleY = 0.97;
+      }
+
+      if (enemy.mode === 'windup' && enemy.intent?.target) {
+        const target = gridCenter(enemy.intent.target);
+        offsetX = (position.x - target.x) * 0.08;
+        offsetY += (position.y - target.y) * 0.08;
+        rotation = Math.sin(time / 80) * 0.05;
+        scaleX = 1.05;
+        scaleY = 0.95;
+      }
+
+      if (enemy.mode === 'attack' && enemy.intent?.target) {
+        const target = gridCenter(enemy.intent.target);
+        offsetX = (target.x - position.x) * 0.22;
+        offsetY += (target.y - position.y) * 0.22;
+        rotation = Math.sin(time / 55) * 0.08;
+        scaleX = 1.08;
+        scaleY = 0.92;
+      }
+
+      sprite.x = position.x + offsetX;
+      sprite.y = position.y + offsetY;
+      sprite.rotation = rotation;
+      sprite.scale.set(scaleX, scaleY);
     });
 
     warningSprites.forEach((warning, enemyId) => {
@@ -638,6 +856,7 @@ async function main() {
       event.preventDefault();
       turnDebugVisible = !turnDebugVisible;
       renderPlayer();
+      renderIntentLayer();
       updateHud();
       return;
     }
@@ -658,6 +877,10 @@ async function main() {
     };
 
     if (moves[event.key] && state.turnPhase === 'player_input' && !phaseAdvanceInFlight) {
+      const now = performance.now();
+      if (now - lastMoveInputAt < MOVE_REPEAT_INTERVAL_MS) return;
+
+      lastMoveInputAt = now;
       event.preventDefault();
       movePlayer(moves[event.key]);
     }

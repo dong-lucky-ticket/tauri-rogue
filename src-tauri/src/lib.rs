@@ -28,12 +28,17 @@ enum TurnPhase {
 }
 
 // 敌人的简化状态机，用于表达当前是在待机、追击还是准备攻击。
+// `Hit` 和 `Dead` 已为后续受击硬直、死亡演出预留，因此暂时允许未被完整使用。
+#[allow(dead_code)]
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum EnemyMode {
-    Idle,
-    Chasing,
-    Attacking,
+    Patrol,
+    Alert,
+    Windup,
+    Attack,
+    Hit,
+    Dead,
 }
 
 // 敌人在本回合中准备执行的意图类型。
@@ -272,7 +277,7 @@ fn enemy_at_except(enemies: &[Enemy], position: Position, excluded_index: usize)
 
 // 将敌人重置为默认待机状态，避免上一回合的意图残留到下一回合。
 fn reset_enemy_state(enemy: &mut Enemy) {
-    enemy.mode = EnemyMode::Idle;
+    enemy.mode = EnemyMode::Patrol;
     enemy.intent = EnemyIntent {
         kind: EnemyIntentKind::Wait,
         target: None,
@@ -365,7 +370,7 @@ fn plan_enemy_turn(state: &mut GameState) {
         reset_enemy_state(&mut state.enemies[index]);
 
         if distance == 1 {
-            state.enemies[index].mode = EnemyMode::Attacking;
+            state.enemies[index].mode = EnemyMode::Windup;
             state.enemies[index].intent = EnemyIntent {
                 kind: EnemyIntentKind::Attack,
                 target: Some(player_position),
@@ -381,7 +386,7 @@ fn plan_enemy_turn(state: &mut GameState) {
             enemy_position,
             player_position,
         ) {
-            state.enemies[index].mode = EnemyMode::Chasing;
+            state.enemies[index].mode = EnemyMode::Alert;
             state.enemies[index].intent = EnemyIntent {
                 kind: EnemyIntentKind::Move,
                 target: Some(next_step),
@@ -420,9 +425,11 @@ fn execute_enemy_actions(state: &mut GameState) {
 
         match intent.kind {
             EnemyIntentKind::Attack => {
+                state.enemies[index].mode = EnemyMode::Attack;
                 attack_count += 1;
             }
             EnemyIntentKind::Move => {
+                state.enemies[index].mode = EnemyMode::Alert;
                 if let Some(target) = intent.target {
                     occupied_positions
                         .retain(|position| !same_position(*position, current_position));
@@ -506,7 +513,7 @@ fn build_level(seed: u32, level: u32) -> GameState {
             id: id as u32,
             position,
             kind: "goblin".to_string(),
-            mode: EnemyMode::Idle,
+            mode: EnemyMode::Patrol,
             intent: EnemyIntent {
                 kind: EnemyIntentKind::Wait,
                 target: None,
