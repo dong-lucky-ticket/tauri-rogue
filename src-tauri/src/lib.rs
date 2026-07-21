@@ -16,6 +16,42 @@ enum PlayerAction {
     MoveRight,
 }
 
+// 一回合中的阶段状态，由前端据此决定何时播放预警、位移和受击动画。
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TurnPhase {
+    PlayerInput,
+    EnemyWarning,
+    EnemyAction,
+    DamageResolution,
+    Animation,
+}
+
+// 敌人的简化状态机，用于表达当前是在待机、追击还是准备攻击。
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EnemyMode {
+    Idle,
+    Chasing,
+    Attacking,
+}
+
+// 敌人在本回合中准备执行的意图类型。
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EnemyIntentKind {
+    Wait,
+    Move,
+    Attack,
+}
+
+// 敌人的单回合意图，前端据此显示预警标记和动作表现。
+#[derive(Clone, Copy, Serialize)]
+struct EnemyIntent {
+    kind: EnemyIntentKind,
+    target: Option<Position>,
+}
+
 // 游戏网格中的二维坐标。
 #[derive(Clone, Copy, Default, Serialize)]
 struct Position {
@@ -49,6 +85,10 @@ struct Enemy {
     position: Position,
     // 敌人类型标识，后续可用于选择不同的 AI 和素材。
     kind: String,
+    // 敌人当前所处的行为状态，用于表现层区分追击与攻击。
+    mode: EnemyMode,
+    // 敌人在本回合已经规划好的动作意图。
+    intent: EnemyIntent,
 }
 
 // 游戏中的宝箱实体。
@@ -100,6 +140,10 @@ struct GameState {
     game_over: bool,
     // 最近一次行动产生的事件文本，用于显示给前端玩家。
     last_event: String,
+    // 当前回合所处的阶段，前端会按这个阶段推进表现和输入锁定。
+    turn_phase: TurnPhase,
+    // 敌人在本回合累计准备造成的伤害，延迟到伤害结算阶段统一生效。
+    pending_damage: u32,
 }
 
 // Tauri 应用中保存当前游戏会话的状态容器。
@@ -226,6 +270,15 @@ fn enemy_at_except(enemies: &[Enemy], position: Position, excluded_index: usize)
         .any(|(index, enemy)| index != excluded_index && same_position(enemy.position, position))
 }
 
+// 将敌人重置为默认待机状态，避免上一回合的意图残留到下一回合。
+fn reset_enemy_state(enemy: &mut Enemy) {
+    enemy.mode = EnemyMode::Idle;
+    enemy.intent = EnemyIntent {
+        kind: EnemyIntentKind::Wait,
+        target: None,
+    };
+}
+
 // 使用 BFS 搜索敌人到玩家的最短路径，并返回路径上的下一格。
 // 地图规模较小，每次敌人回合重新搜索可以换取清晰且可靠的追踪逻辑。
 fn find_enemy_next_step(
@@ -286,24 +339,38 @@ fn find_enemy_next_step(
     None
 }
 
-// 让所有敌人响应一次玩家行动。
-// 敌人相邻时攻击，否则沿 BFS 找到的最短路径靠近玩家。
-fn enemy_turn(state: &mut GameState) {
+// 判断当前是否存在需要在后续阶段执行的敌人意图。
+fn has_enemy_plan(state: &GameState) -> bool {
+    state
+        .enemies
+        .iter()
+        .any(|enemy| enemy.intent.kind != EnemyIntentKind::Wait)
+}
+
+// 在玩家行动结束后为每个敌人规划本回合的动作。
+fn plan_enemy_turn(state: &mut GameState) {
     if state.game_over {
         return;
     }
 
     let player_position = state.player;
-    let mut damage_count = 0;
+    let mut planned_attackers = 0;
+    let mut planned_movers = 0;
 
     for index in 0..state.enemies.len() {
         let enemy_position = state.enemies[index].position;
         let distance = enemy_position.x.abs_diff(player_position.x)
             + enemy_position.y.abs_diff(player_position.y);
 
+        reset_enemy_state(&mut state.enemies[index]);
+
         if distance == 1 {
-            state.hp = state.hp.saturating_sub(1);
-            damage_count += 1;
+            state.enemies[index].mode = EnemyMode::Attacking;
+            state.enemies[index].intent = EnemyIntent {
+                kind: EnemyIntentKind::Attack,
+                target: Some(player_position),
+            };
+            planned_attackers += 1;
             continue;
         }
 
@@ -314,17 +381,110 @@ fn enemy_turn(state: &mut GameState) {
             enemy_position,
             player_position,
         ) {
-            state.enemies[index].position = next_step;
+            state.enemies[index].mode = EnemyMode::Chasing;
+            state.enemies[index].intent = EnemyIntent {
+                kind: EnemyIntentKind::Move,
+                target: Some(next_step),
+            };
+            planned_movers += 1;
         }
     }
 
-    if damage_count > 0 {
-        state.last_event = format!("哥布林攻击了你，生命值 -{damage_count}。");
+    state.pending_damage = 0;
+
+    if planned_attackers > 0 {
+        state.turn_phase = TurnPhase::EnemyWarning;
+        state.last_event = format!("危险！有 {planned_attackers} 个哥布林正准备攻击。");
+    } else if planned_movers > 0 {
+        // 普通游戏中前端会立即推进该阶段；只有 F4 调试模式才会停下来观察它。
+        state.turn_phase = TurnPhase::EnemyWarning;
+        state.last_event = format!("{planned_movers} 个哥布林开始移动。");
+    } else {
+        state.turn_phase = TurnPhase::PlayerInput;
+    }
+}
+
+// 在敌人行动阶段执行已经规划好的移动和攻击意图。
+fn execute_enemy_actions(state: &mut GameState) {
+    let mut occupied_positions = state
+        .enemies
+        .iter()
+        .map(|enemy| enemy.position)
+        .collect::<Vec<_>>();
+    let mut moved_count = 0;
+    let mut attack_count = 0;
+
+    for index in 0..state.enemies.len() {
+        let current_position = state.enemies[index].position;
+        let intent = state.enemies[index].intent;
+
+        match intent.kind {
+            EnemyIntentKind::Attack => {
+                attack_count += 1;
+            }
+            EnemyIntentKind::Move => {
+                if let Some(target) = intent.target {
+                    occupied_positions
+                        .retain(|position| !same_position(*position, current_position));
+
+                    if !occupied_positions
+                        .iter()
+                        .any(|position| same_position(*position, target))
+                        && !same_position(target, state.player)
+                    {
+                        state.enemies[index].position = target;
+                        moved_count += 1;
+                        occupied_positions.push(target);
+                    } else {
+                        occupied_positions.push(current_position);
+                    }
+                }
+            }
+            EnemyIntentKind::Wait => {}
+        }
     }
 
-    if state.hp == 0 {
-        state.game_over = true;
-        state.last_event = "你倒下了。点击“重新生成地牢”再试一次。".to_string();
+    state.pending_damage = attack_count;
+    state.turn_phase = TurnPhase::EnemyAction;
+
+    if attack_count > 0 && moved_count > 0 {
+        state.last_event = format!("哥布林完成包围，{attack_count} 次攻击即将命中。");
+    } else if attack_count > 0 {
+        state.last_event = format!("哥布林发起了 {attack_count} 次攻击。");
+    } else if moved_count > 0 {
+        state.last_event = format!("{moved_count} 个哥布林完成了移动。");
+    }
+}
+
+// 在伤害结算阶段统一扣除生命值，并处理死亡结果。
+fn resolve_enemy_damage(state: &mut GameState) {
+    if state.pending_damage > 0 {
+        state.hp = state.hp.saturating_sub(state.pending_damage);
+        state.last_event = format!("哥布林攻击了你，生命值 -{}。", state.pending_damage);
+        if state.hp == 0 {
+            state.game_over = true;
+            state.last_event = "你倒下了。点击“重新生成地牢”再试一次。".to_string();
+        }
+
+        state.turn_phase = TurnPhase::DamageResolution;
+        return;
+    }
+
+    // 本回合没有受到伤害时，直接进入动画收尾阶段，避免额外停顿。
+    state.turn_phase = TurnPhase::Animation;
+}
+
+// 动画播放结束后清理敌人意图，并把控制权归还给玩家。
+fn finish_turn(state: &mut GameState) {
+    for enemy in &mut state.enemies {
+        reset_enemy_state(enemy);
+    }
+
+    state.pending_damage = 0;
+    state.turn_phase = TurnPhase::PlayerInput;
+
+    if !state.game_over && state.portal.active {
+        state.last_event = "所有目标已处理，门户已经激活。".to_string();
     }
 }
 
@@ -346,6 +506,11 @@ fn build_level(seed: u32, level: u32) -> GameState {
             id: id as u32,
             position,
             kind: "goblin".to_string(),
+            mode: EnemyMode::Idle,
+            intent: EnemyIntent {
+                kind: EnemyIntentKind::Wait,
+                target: None,
+            },
         })
         .collect();
     let chests = (0..2)
@@ -377,6 +542,8 @@ fn build_level(seed: u32, level: u32) -> GameState {
         max_hp: 5,
         game_over: false,
         last_event: "清理哥布林并打开宝箱，激活门户。".to_string(),
+        turn_phase: TurnPhase::PlayerInput,
+        pending_damage: 0,
     }
 }
 
@@ -405,6 +572,10 @@ fn player_action(
         return Ok(state.clone());
     }
 
+    if state.turn_phase != TurnPhase::PlayerInput {
+        return Err("wait until the current turn finishes resolving".to_string());
+    }
+
     let (dx, dy) = match action {
         PlayerAction::MoveUp => (0, -1),
         PlayerAction::MoveDown => (0, 1),
@@ -420,7 +591,7 @@ fn player_action(
 
     if !can_walk(&state.map, next_x, next_y) {
         state.last_event = "你撞到了墙。".to_string();
-        enemy_turn(state);
+        plan_enemy_turn(state);
         return Ok(state.clone());
     }
 
@@ -452,12 +623,49 @@ fn player_action(
         }
     }
 
-    // 玩家完成行动后，所有敌人依次移动或攻击。
-    enemy_turn(state);
     refresh_portal(state);
     if state.portal.active {
         state.last_event = "所有目标已处理，门户已经激活。".to_string();
+        state.turn_phase = TurnPhase::PlayerInput;
+    } else {
+        // 玩家完成行动后，先规划敌人回合，再由前端逐阶段推进。
+        plan_enemy_turn(state);
     }
+    Ok(state.clone())
+}
+
+// 推进正式回合阶段，让前端能够依次播放预警、动作和受击表现。
+#[tauri::command]
+fn advance_turn_phase(session: State<'_, Mutex<GameSession>>) -> Result<GameState, String> {
+    let mut session = session.lock().map_err(|_| "game session lock poisoned")?;
+    let state = session
+        .state
+        .as_mut()
+        .ok_or_else(|| "start a dungeon before advancing turn phases".to_string())?;
+
+    match state.turn_phase {
+        TurnPhase::PlayerInput => return Ok(state.clone()),
+        TurnPhase::EnemyWarning => {
+            if has_enemy_plan(state) {
+                execute_enemy_actions(state);
+            } else {
+                state.turn_phase = TurnPhase::PlayerInput;
+            }
+        }
+        TurnPhase::EnemyAction => {
+            resolve_enemy_damage(state);
+        }
+        TurnPhase::DamageResolution => {
+            state.turn_phase = TurnPhase::Animation;
+            if !state.game_over {
+                state.last_event = "本回合动作已经结算完毕。".to_string();
+            }
+        }
+        TurnPhase::Animation => {
+            finish_turn(state);
+        }
+    }
+
     Ok(state.clone())
 }
 
@@ -497,6 +705,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             new_dungeon,
             player_action,
+            advance_turn_phase,
             next_level
         ])
         .run(tauri::generate_context!())

@@ -58,6 +58,8 @@ const state = {
   moves: 0,
   defeated: 0,
   gold: 0,
+  turnPhase: 'player_input',
+  pendingDamage: 0,
   hp: 5,
   maxHp: 5,
   gameOver: false,
@@ -65,10 +67,27 @@ const state = {
 };
 const assets = {};
 let debugVisible = false;
+let turnDebugVisible = false;
 // 防止上一次行动完成前重复发送移动请求。
 let actionInFlight = false;
 // 记录受击反馈结束时间，用于让玩家精灵短暂闪烁。
 let damageFeedbackUntil = 0;
+let phaseAdvanceInFlight = false;
+
+const PHASE_LABELS = {
+  player_input: '玩家行动',
+  enemy_warning: '敌人预警',
+  enemy_action: '敌人行动',
+  damage_resolution: '伤害结算',
+  animation: '动画播放',
+};
+
+const PHASE_DELAYS = {
+  enemy_warning: 110,
+  enemy_action: 110,
+  damage_resolution: 150,
+  animation: 70,
+};
 
 // 将网格坐标转换为精灵中心点的像素坐标。
 function gridCenter(position) {
@@ -110,6 +129,11 @@ function getAnimatedPosition(sprite, target) {
 // 判断坐标是否在地图范围内，并且对应位置是地板。
 function isFloor(x, y) {
   return x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT && state.map[y][x];
+}
+
+// 计算两个网格坐标的曼哈顿距离，用于判断敌人是否已经贴近玩家。
+function manhattanDistance(a, b) {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
 // 将纹理放置到网格坐标对应的像素位置。
@@ -237,14 +261,19 @@ function renderPlayer(previousPlayer = null, previousEnemies = []) {
     const position = previousEnemy ? gridCenter(previousEnemy.position) : gridCenter(enemy.position);
     sprite.x = position.x;
     sprite.y = position.y;
+    const enemyIsThreatening =
+      enemy.intent?.kind === 'attack' || manhattanDistance(enemy.position, state.player) === 1;
+
+    if (turnDebugVisible && enemy.intent?.kind === 'attack') {
+      sprite.tint = 0xff8d7b;
+    } else if (turnDebugVisible && state.turnPhase === 'enemy_warning' && enemy.intent?.kind === 'move') {
+      sprite.tint = 0xf0bd73;
+    }
     enemySprites.set(enemy.id, sprite);
     actorLayer.addChild(sprite);
 
-    // 敌人与玩家相邻时显示感叹号，提醒玩家下一次行动可能受到攻击。
-    const distance =
-      Math.abs(enemy.position.x - state.player.x) +
-      Math.abs(enemy.position.y - state.player.y);
-    if (distance === 1) {
+    // 只有在敌人预警阶段，并且敌人计划执行攻击时，才显示感叹号。
+    if (turnDebugVisible && enemyIsThreatening) {
       const warning = new PIXI.Text({
         text: '!',
         style: {
@@ -294,9 +323,11 @@ function renderPlayer(previousPlayer = null, previousEnemies = []) {
 // 将游戏状态同步到 HUD 文本。
 function updateHud() {
   const healthElement = document.querySelector('#health');
+  document.querySelector('#phase').hidden = !turnDebugVisible;
   document.querySelector('#position').textContent = `位置 ${state.player.x}, ${state.player.y}`;
   document.querySelector('#moves').textContent = `回合 ${state.moves}`;
   document.querySelector('#level').textContent = `关卡 ${state.level}`;
+  document.querySelector('#phase').textContent = `阶段 ${PHASE_LABELS[state.turnPhase] ?? '进行中'}`;
   healthElement.textContent = `生命 ${state.hp}/${state.maxHp}`;
   healthElement.classList.toggle('health-warning', state.hp <= Math.ceil(state.maxHp / 2));
   healthElement.classList.toggle('health-critical', state.hp <= 1);
@@ -307,6 +338,9 @@ function updateHud() {
   document.querySelector('#portal-status').textContent = state.portal.active
     ? '门户已激活'
     : '门户未激活';
+  document.querySelector('#debug-status').textContent = `F3 地图调试 ${
+    debugVisible ? '开' : '关'
+  } · F4 回合调试 ${turnDebugVisible ? '开' : '关'}`;
   document.querySelector('#game-over').hidden = !state.gameOver;
 }
 
@@ -393,7 +427,7 @@ function applyGameState(nextState, options = {}) {
     id: enemy.id,
     position: { ...enemy.position },
   }));
-  const tookDamage = nextState.hp < state.hp;
+  const damageTaken = Math.max(0, state.hp - nextState.hp);
   const defeatedEnemy = previousEnemies.find(
     (enemy) => !nextState.enemies.some((nextEnemy) => nextEnemy.id === enemy.id),
   );
@@ -409,6 +443,8 @@ function applyGameState(nextState, options = {}) {
   state.moves = nextState.moves;
   state.defeated = nextState.defeated;
   state.gold = nextState.gold;
+  state.turnPhase = nextState.turn_phase;
+  state.pendingDamage = nextState.pending_damage;
   state.hp = nextState.hp;
   state.maxHp = nextState.max_hp;
   state.gameOver = nextState.game_over;
@@ -426,17 +462,47 @@ function applyGameState(nextState, options = {}) {
       spawnAttackEffect(previousPlayer, defeatedEnemy.position);
       spawnDamageText(defeatedEnemy.position, '击败', 0xffd166);
     }
-    if (tookDamage) {
+    if (damageTaken > 0) {
       showDamageFeedback();
-      spawnDamageText(state.player, '生命 -1', 0xef806e);
+      spawnDamageText(state.player, `生命 -${damageTaken}`, 0xef806e);
     }
+  }
+}
+
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+// 按正式回合阶段自动推进，依次触发预警、敌人动作、伤害结算和收尾。
+async function resolveTurnPhases() {
+  if (phaseAdvanceInFlight) return;
+
+  phaseAdvanceInFlight = true;
+  try {
+    while (state.turnPhase !== 'player_input' && !state.gameOver) {
+      if (turnDebugVisible) {
+        let delay = PHASE_DELAYS[state.turnPhase] ?? 120;
+        if (state.turnPhase === 'enemy_action' && state.pendingDamage === 0) delay = 75;
+        if (state.turnPhase === 'animation' && state.pendingDamage === 0) delay = 20;
+        await wait(delay);
+        applyGameState(await invoke('advance_turn_phase'));
+      } else {
+        let nextState = await invoke('advance_turn_phase');
+        while (nextState.turn_phase !== 'player_input' && !nextState.game_over) {
+          nextState = await invoke('advance_turn_phase');
+        }
+        applyGameState(nextState);
+      }
+    }
+  } finally {
+    phaseAdvanceInFlight = false;
   }
 }
 
 // 生成随机种子并请求后端创建新的地牢。
 async function newDungeon() {
   const seed = Math.floor(Math.random() * 0xffffffff);
-  applyGameState(await invoke('new_dungeon', { seed }));
+  applyGameState(await invoke('new_dungeon', { seed }), { skipEffects: true });
 }
 
 // 将一次移动操作发送给后端。
@@ -455,6 +521,7 @@ async function movePlayer(action) {
       applyGameState(await invoke('next_level'), { skipEffects: true });
     } else {
       applyGameState(nextState);
+      await resolveTurnPhases();
     }
   } finally {
     actionInFlight = false;
@@ -559,13 +626,19 @@ async function main() {
       event.preventDefault();
       debugVisible = !debugVisible;
       renderDebugLayer();
-      document.querySelector('#debug-status').textContent = debugVisible
-        ? 'F3 调试层 开'
-        : 'F3 调试层 关';
+      updateHud();
       console.table({
         rooms: state.rooms,
         corridors: state.corridors,
       });
+      return;
+    }
+
+    if (event.key === 'F4') {
+      event.preventDefault();
+      turnDebugVisible = !turnDebugVisible;
+      renderPlayer();
+      updateHud();
       return;
     }
 
@@ -584,7 +657,7 @@ async function main() {
       D: 'move_right',
     };
 
-    if (moves[event.key]) {
+    if (moves[event.key] && state.turnPhase === 'player_input' && !phaseAdvanceInFlight) {
       event.preventDefault();
       movePlayer(moves[event.key]);
     }
