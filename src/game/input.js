@@ -1,8 +1,8 @@
 import { MOVE_REPEAT_INTERVAL_MS } from './constants.js';
-import { renderActors, renderDebugLayer, renderIntentLayer, updateHud } from './rendering.js';
+import { renderDebugLayer, updateHud } from './rendering.js';
 import { movePlayer, newDungeon } from './runtime.js';
 
-// 绑定键盘输入和调试快捷键。
+// 绑定键盘输入和地图调试快捷键。
 export function setupInput(ctx) {
   // 统一监听键盘事件，把输入转换成 Rust PlayerAction 使用的字符串。
   window.addEventListener('keydown', (event) => {
@@ -17,16 +17,6 @@ export function setupInput(ctx) {
         rooms: ctx.state.rooms,
         corridors: ctx.state.corridors,
       });
-      return;
-    }
-
-    if (event.key === 'F4') {
-      // F4 同时控制阶段延迟、阶段 HUD 和敌人意图显示。
-      event.preventDefault();
-      ctx.flags.turnDebugVisible = !ctx.flags.turnDebugVisible;
-      renderActors(ctx);
-      renderIntentLayer(ctx);
-      updateHud(ctx);
       return;
     }
 

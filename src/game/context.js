@@ -15,8 +15,6 @@ export function createGameContext() {
     debugLayer: new PIXI.Container(),
     // 玩家、敌人、宝箱和门户所在的实体层。
     actorLayer: new PIXI.Container(),
-    // F4 敌人移动箭头、目标格和攻击范围所在的意图层。
-    intentLayer: new PIXI.Container(),
     // 飘字、挥击、受击和死亡演出所在的效果层。
     effectLayer: new PIXI.Container(),
     // loadAssets 会把已经加载的 PIXI 纹理填入这里。
@@ -29,10 +27,8 @@ export function createGameContext() {
       portalSprite: null,
     },
     collections: {
-      // 通过敌人 id 找到对应精灵，用于动画和警告标记跟随。
+      // 通过敌人 id 找到对应精灵，用于动画跟随。
       enemySprites: new Map(),
-      // 保存 F4 模式下敌人头顶的感叹号。
-      warningSprites: new Map(),
       // 保存正在播放的移动动画，键为对应的 Sprite。
       movementAnimations: new Map(),
       // 保存临时特效及其开始时间、持续时间和动画数据。
@@ -41,8 +37,6 @@ export function createGameContext() {
     flags: {
       // F3 是否显示房间和走廊调试层。
       debugVisible: false,
-      // F4 是否显示敌人意图和正式阶段延迟。
-      turnDebugVisible: false,
       // 是否正在处理一个玩家动作，防止重复 invoke。
       actionInFlight: false,
       // 受击反馈结束时间，用于 ticker 中让玩家精灵短暂闪烁。
@@ -51,12 +45,6 @@ export function createGameContext() {
       phaseAdvanceInFlight: false,
       // 上一次方向键触发移动的时间戳，用于长按节流。
       lastMoveInputAt: 0,
-      // FPS 统计窗口内累计的帧数。
-      fpsFrameCount: 0,
-      // FPS 统计窗口内累计经过的毫秒数。
-      fpsElapsedMs: 0,
-      // 最近一次计算出的平均 FPS，仅用于 F4 调试显示。
-      displayFps: 0,
     },
   };
 }

@@ -6,7 +6,6 @@ import {
   FLOOR_TYPE_LABELS,
   MAP_HEIGHT,
   MAP_WIDTH,
-  PHASE_LABELS,
   TILE_SIZE,
 } from './constants.js';
 
@@ -23,11 +22,6 @@ function isFloor(ctx, x, y) {
   // 统一判断坐标是否在地图范围内且为可行走地板。
   // 墙体选择、地图绘制和调试渲染都依赖这个判断。
   return x >= 0 && x < MAP_WIDTH && y >= 0 && y < MAP_HEIGHT && ctx.state.map[y][x];
-}
-
-// 计算两个网格位置之间的曼哈顿距离，用于判断敌人是否与玩家相邻。
-function manhattanDistance(a, b) {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
 function addSprite(ctx, texture, x, y) {
@@ -161,66 +155,10 @@ export function renderDebugLayer(ctx) {
   });
 }
 
-export function renderIntentLayer(ctx) {
-  // F4 调试层展示敌人的本回合意图，而不是敌人当前已经完成的动作。
-  ctx.intentLayer.removeChildren();
-  if (!ctx.flags.turnDebugVisible) return;
-  if (ctx.state.turnPhase !== 'enemy_warning' && ctx.state.turnPhase !== 'enemy_action') return;
-
-  ctx.state.enemies.forEach((enemy) => {
-    if (!enemy.intent?.target) return;
-
-    const from = gridCenter(enemy.position);
-    const to = gridCenter(enemy.intent.target);
-
-    if (enemy.intent.kind === 'move') {
-      // 移动意图同时显示目标格描边、连线和箭头，帮助确认 BFS 结果。
-      const overlay = new PIXI.Graphics();
-      overlay.rect(
-        enemy.intent.target.x * TILE_SIZE + 2,
-        enemy.intent.target.y * TILE_SIZE + 2,
-        TILE_SIZE - 4,
-        TILE_SIZE - 4,
-      );
-      overlay.fill({ color: 0xf0bd73, alpha: 0.16 });
-      overlay.stroke({ color: 0xf0bd73, width: 3, alpha: 0.98 });
-      overlay.moveTo(from.x, from.y);
-      overlay.lineTo(to.x, to.y);
-      overlay.stroke({ color: 0xffe0a6, width: 3, alpha: 0.92 });
-
-      const dx = to.x - from.x;
-      const dy = to.y - from.y;
-      const length = Math.max(1, Math.hypot(dx, dy));
-      const ux = dx / length;
-      const uy = dy / length;
-      const arrowSize = 8;
-      overlay.moveTo(to.x, to.y);
-      overlay.lineTo(to.x - ux * arrowSize - uy * 5, to.y - uy * arrowSize + ux * 5);
-      overlay.moveTo(to.x, to.y);
-      overlay.lineTo(to.x - ux * arrowSize + uy * 5, to.y - uy * arrowSize - ux * 5);
-      overlay.stroke({ color: 0xffe0a6, width: 3, alpha: 0.98 });
-      ctx.intentLayer.addChild(overlay);
-    }
-
-    if (enemy.intent.kind === 'attack') {
-      // 攻击意图显示玩家目标格、攻击连线和范围圆。
-      const overlay = new PIXI.Graphics();
-      overlay.circle(to.x, to.y, TILE_SIZE * 0.34);
-      overlay.fill({ color: 0xff6f61, alpha: 0.16 });
-      overlay.stroke({ color: 0xff6f61, width: 3, alpha: 0.98 });
-      overlay.moveTo(from.x, from.y);
-      overlay.lineTo(to.x, to.y);
-      overlay.stroke({ color: 0xff8d7b, width: 3, alpha: 0.88 });
-      ctx.intentLayer.addChild(overlay);
-    }
-  });
-}
-
 export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
   // 实体层每次状态同步时重建，确保宝箱开关、敌人增删和门户状态一致。
   ctx.actorLayer.removeChildren();
   ctx.collections.enemySprites.clear();
-  ctx.collections.warningSprites.clear();
   ctx.collections.movementAnimations.clear();
   ctx.refs.playerSprite = null;
   ctx.refs.portalSprite = null;
@@ -247,40 +185,8 @@ export function renderActors(ctx, previousPlayer = null, previousEnemies = []) {
     const position = previousEnemy ? gridCenter(previousEnemy.position) : gridCenter(enemy.position);
     sprite.x = position.x;
     sprite.y = position.y;
-    const enemyIsThreatening =
-      enemy.intent?.kind === 'attack' || manhattanDistance(enemy.position, ctx.state.player) === 1;
-
-    if (ctx.flags.turnDebugVisible && enemy.intent?.kind === 'attack') {
-      // 调试模式下用颜色区分攻击中的敌人。
-      sprite.tint = 0xff8d7b;
-    } else if (
-      ctx.flags.turnDebugVisible &&
-      ctx.state.turnPhase === 'enemy_warning' &&
-      enemy.intent?.kind === 'move'
-    ) {
-      sprite.tint = 0xf0bd73;
-    }
     ctx.collections.enemySprites.set(enemy.id, sprite);
     ctx.actorLayer.addChild(sprite);
-
-    if (ctx.flags.turnDebugVisible && enemyIsThreatening) {
-      // 感叹号只在 F4 调试模式显示，正常游戏通过短暂飘字提示攻击预警。
-      const warning = new PIXI.Text({
-        text: '!',
-        style: {
-          fill: 0xff6f61,
-          fontFamily: 'Georgia',
-          fontSize: 10,
-          fontWeight: 'bold',
-          stroke: { color: 0x211a29, width: 4 },
-        },
-      });
-      warning.anchor.set(0.5);
-      warning.x = position.x + TILE_SIZE * 0.28;
-      warning.y = position.y - TILE_SIZE * 0.32;
-      ctx.collections.warningSprites.set(enemy.id, warning);
-      ctx.actorLayer.addChild(warning);
-    }
   });
 
   if (ctx.state.portal.active) {
@@ -317,15 +223,11 @@ export function updateHud(ctx) {
   // HUD 只读取前端状态，不参与规则计算。
   // 所有文本更新集中在这里，避免不同流程各自修改 DOM 造成显示不一致。
   const healthElement = document.querySelector('#health');
-  document.querySelector('#phase').hidden = !ctx.flags.turnDebugVisible;
-  document.querySelector('#fps').hidden = !ctx.flags.turnDebugVisible;
   document.querySelector('#position').textContent = `位置 ${ctx.state.player.x}, ${ctx.state.player.y}`;
   document.querySelector('#moves').textContent = `回合 ${ctx.state.moves}`;
   document.querySelector('#level').textContent = `关卡 ${ctx.state.level}`;
   document.querySelector('#floor-type').textContent =
     FLOOR_TYPE_LABELS[ctx.state.floorType] ?? '未知层';
-  document.querySelector('#phase').textContent = `阶段 ${PHASE_LABELS[ctx.state.turnPhase] ?? '进行中'}`;
-  document.querySelector('#fps').textContent = `FPS ${ctx.flags.displayFps.toFixed(0)}`;
   healthElement.textContent = `生命 ${ctx.state.hp}/${ctx.state.maxHp}`;
   healthElement.classList.toggle('health-warning', ctx.state.hp <= Math.ceil(ctx.state.maxHp / 2));
   healthElement.classList.toggle('health-critical', ctx.state.hp <= 1);
@@ -338,7 +240,7 @@ export function updateHud(ctx) {
     : '门户未激活';
   document.querySelector('#debug-status').textContent = `F3 地图调试 ${
     ctx.flags.debugVisible ? '开' : '关'
-  } · F4 回合调试 ${ctx.flags.turnDebugVisible ? '开' : '关'}`;
+  }`;
   document.querySelector('#game-over').hidden = !ctx.state.gameOver;
 }
 
@@ -453,20 +355,20 @@ export function spawnEnemyDeathEffect(ctx, position, source) {
   });
 }
 
-export function spawnEnemyWarningEffects(ctx, gameState) {
-  // 正常模式不显示完整调试覆盖层，因此使用感叹号飘字提示即将攻击。
-  gameState.enemies.forEach((enemy) => {
-    if (enemy.intent?.kind === 'attack' && !ctx.flags.turnDebugVisible) {
-      spawnDamageText(ctx, enemy.position, '!', 0xff6f61);
-    }
-  });
-}
-
 export function spawnEnemyActionEffects(ctx, gameState) {
   // EnemyAction 阶段为每个攻击意图生成一次攻击轨迹。
   gameState.enemies.forEach((enemy) => {
     if (enemy.intent?.kind === 'attack') {
       spawnEnemyAttackEffect(ctx, enemy.position, gameState.player);
+    }
+  });
+}
+
+export function spawnEnemyWarningEffects(ctx, gameState) {
+  // 敌人进入预警阶段时用飘字提示即将攻击。
+  gameState.enemies.forEach((enemy) => {
+    if (enemy.intent?.kind === 'attack') {
+      spawnDamageText(ctx, enemy.position, '!', 0xff6f61);
     }
   });
 }
@@ -507,10 +409,9 @@ export function updateVisualEffects(ctx, now) {
 }
 
 export function mountApp(ctx) {
-  // 将各渲染层按底到顶的顺序挂载：
-  // 地图、地图调试、实体、敌人意图、临时特效。
+  // 将各渲染层按底到顶的顺序挂载：地图、地图调试、实体、临时特效。
   document.querySelector('#game').appendChild(ctx.app.canvas);
-  ctx.board.addChild(ctx.mapLayer, ctx.debugLayer, ctx.actorLayer, ctx.intentLayer, ctx.effectLayer);
+  ctx.board.addChild(ctx.mapLayer, ctx.debugLayer, ctx.actorLayer, ctx.effectLayer);
   ctx.app.stage.addChild(ctx.board);
 }
 
@@ -532,19 +433,6 @@ export function startTicker(ctx) {
   // ticker 是前端唯一的逐帧循环，负责呼吸、阶段动作、门户脉冲和临时特效。
   ctx.app.ticker.add(() => {
     const time = ctx.app.ticker.lastTime;
-    // 使用约 250ms 的统计窗口计算平均 FPS，避免直接显示单帧值造成跳动。
-    ctx.flags.fpsFrameCount += 1;
-    ctx.flags.fpsElapsedMs += ctx.app.ticker.deltaMS;
-    if (ctx.flags.fpsElapsedMs >= 250) {
-      ctx.flags.displayFps =
-        (ctx.flags.fpsFrameCount / ctx.flags.fpsElapsedMs) * 1000;
-      ctx.flags.fpsFrameCount = 0;
-      ctx.flags.fpsElapsedMs = 0;
-
-      // FPS 只在调试模式中显示，因此关闭调试时不频繁更新 HUD 文本。
-      if (ctx.flags.turnDebugVisible) updateHud(ctx);
-    }
-
     ctx.actorLayer.alpha = 1;
 
     if (ctx.refs.playerSprite) {
@@ -602,17 +490,6 @@ export function startTicker(ctx) {
       sprite.y = position.y + offsetY;
       sprite.rotation = rotation;
       sprite.scale.set(scaleX, scaleY);
-    });
-
-    ctx.collections.warningSprites.forEach((warning, enemyId) => {
-      // 感叹号跟随敌人精灵，而不是固定在原始网格位置。
-      const sprite = ctx.collections.enemySprites.get(enemyId);
-      if (!sprite) return;
-      const pulse = 1 + Math.sin(time / 110) * 0.12;
-      warning.x = sprite.x + TILE_SIZE * 0.28;
-      warning.y = sprite.y - TILE_SIZE * 0.32;
-      warning.scale.set(pulse);
-      warning.alpha = 0.72 + Math.sin(time / 100) * 0.2;
     });
 
     if (ctx.refs.portalSprite) {

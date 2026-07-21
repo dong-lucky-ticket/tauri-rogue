@@ -169,7 +169,6 @@ pub fn plan_enemy_turn(state: &mut GameState) {
         state.turn_phase = TurnPhase::EnemyWarning;
         state.last_event = format!("危险！有 {planned_attackers} 个哥布林正准备攻击。");
     } else if planned_movers > 0 {
-        // 普通游戏中前端会立即推进该阶段；只有 F4 调试模式才会停下来观察它。
         state.turn_phase = TurnPhase::EnemyWarning;
         state.last_event = format!("{planned_movers} 个哥布林开始移动。");
     } else {

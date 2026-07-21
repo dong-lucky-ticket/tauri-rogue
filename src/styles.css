@@ -125,11 +125,6 @@ body {
   text-shadow: 0 1px 3px #000;
 }
 
-.hint #debug-status {
-  /* 调试状态使用强调色，方便开发时识别。 */
-  color: #f0bd73;
-}
-
 #event-status {
   /* 当前事件比固定操作提示更醒目，帮助玩家理解每回合发生了什么。 */
   color: #e7c58a;

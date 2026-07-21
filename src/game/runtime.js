@@ -1,10 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 
-import { PHASE_DELAYS } from './constants.js';
 import {
   renderActors,
   renderDebugLayer,
-  renderIntentLayer,
   renderMap,
   showDamageFeedback,
   spawnAttackEffect,
@@ -14,11 +12,6 @@ import {
   spawnEnemyWarningEffects,
   updateHud,
 } from './rendering.js';
-
-// 将异步等待封装成 Promise，供调试模式逐阶段暂停使用。
-function wait(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
 
 // 将 Rust 返回的 snake_case GameState 同步到前端 camelCase 状态。
 // 这是前后端数据边界的唯一入口，渲染层不直接读取 invoke 返回值。
@@ -61,8 +54,7 @@ export function applyGameState(ctx, nextState, options = {}) {
   ctx.state.gameOver = nextState.game_over;
   ctx.state.lastEvent = nextState.last_event;
 
-  // 状态更新后按固定顺序重建各渲染层：
-  // 地图 -> 调试层 -> 实体 -> 意图层 -> HUD。
+  // 状态更新后按固定顺序重建各渲染层：地图 -> 调试层 -> 实体 -> HUD。
   renderMap(ctx);
   renderDebugLayer(ctx);
   renderActors(
@@ -70,15 +62,9 @@ export function applyGameState(ctx, nextState, options = {}) {
     !options.skipEffects && previousEnemies.length > 0 ? previousPlayer : null,
     !options.skipEffects ? previousEnemies : [],
   );
-  renderIntentLayer(ctx);
   updateHud(ctx);
 
   if (!options.skipEffects) {
-    // 只有阶段真正切换到 enemy_warning/enemy_action 时才生成一次特效，
-    // 防止调试循环中的重复状态刷新导致重复播放。
-    if (previousTurnPhase !== nextState.turn_phase && nextState.turn_phase === 'enemy_warning') {
-      spawnEnemyWarningEffects(ctx, nextState);
-    }
     if (previousTurnPhase !== nextState.turn_phase && nextState.turn_phase === 'enemy_action') {
       spawnEnemyActionEffects(ctx, nextState);
     }
@@ -103,25 +89,24 @@ export async function resolveTurnPhases(ctx) {
   ctx.flags.phaseAdvanceInFlight = true;
   try {
     while (ctx.state.turnPhase !== 'player_input' && !ctx.state.gameOver) {
-      if (ctx.flags.turnDebugVisible) {
-        // F4 模式保留阶段间隔，方便观察预警、行动、伤害和动画四个阶段。
-        let delay = PHASE_DELAYS[ctx.state.turnPhase] ?? 120;
-        if (ctx.state.turnPhase === 'enemy_action' && ctx.state.pendingDamage === 0) delay = 75;
-        if (ctx.state.turnPhase === 'animation' && ctx.state.pendingDamage === 0) delay = 20;
-        await wait(delay);
-        applyGameState(ctx, await invoke('advance_turn_phase'));
-      } else {
-        // 正常模式不展示阶段停顿，连续请求后端直到回到玩家输入阶段。
-        let nextState = await invoke('advance_turn_phase');
-        if (nextState.turn_phase === 'enemy_warning') spawnEnemyWarningEffects(ctx, nextState);
-        if (nextState.turn_phase === 'enemy_action') spawnEnemyActionEffects(ctx, nextState);
-        while (nextState.turn_phase !== 'player_input' && !nextState.game_over) {
-          nextState = await invoke('advance_turn_phase');
-          if (nextState.turn_phase === 'enemy_warning') spawnEnemyWarningEffects(ctx, nextState);
-          if (nextState.turn_phase === 'enemy_action') spawnEnemyActionEffects(ctx, nextState);
-        }
-        applyGameState(ctx, nextState);
+      // 连续请求后端直到回到玩家输入阶段。
+      let nextState = await invoke('advance_turn_phase');
+      if (nextState.turn_phase === 'enemy_warning') {
+        spawnEnemyWarningEffects(ctx, nextState);
       }
+      if (nextState.turn_phase === 'enemy_action') {
+        spawnEnemyActionEffects(ctx, nextState);
+      }
+      while (nextState.turn_phase !== 'player_input' && !nextState.game_over) {
+        nextState = await invoke('advance_turn_phase');
+        if (nextState.turn_phase === 'enemy_warning') {
+          spawnEnemyWarningEffects(ctx, nextState);
+        }
+        if (nextState.turn_phase === 'enemy_action') {
+          spawnEnemyActionEffects(ctx, nextState);
+        }
+      }
+      applyGameState(ctx, nextState);
     }
   } finally {
     ctx.flags.phaseAdvanceInFlight = false;

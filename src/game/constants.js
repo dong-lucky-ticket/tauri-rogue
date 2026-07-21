@@ -13,24 +13,6 @@ export const BOARD_HEIGHT = MAP_HEIGHT * TILE_SIZE;
 // 该限制在前端输入层执行，避免连续请求过快导致操作体验失控。
 export const MOVE_REPEAT_INTERVAL_MS = 120;
 
-// Rust 返回的回合阶段值与玩家可读中文之间的映射。
-export const PHASE_LABELS = {
-  player_input: '玩家行动',
-  enemy_warning: '敌人预警',
-  enemy_action: '敌人行动',
-  damage_resolution: '伤害结算',
-  animation: '动画播放',
-};
-
-// F4 调试模式使用的阶段延迟。
-// 正常模式会跳过这些等待，调试模式才逐阶段停留观察。
-export const PHASE_DELAYS = {
-  enemy_warning: 110,
-  enemy_action: 110,
-  damage_resolution: 150,
-  animation: 70,
-};
-
 // Rust 返回的关卡类型值与 HUD 文案之间的映射。
 export const FLOOR_TYPE_LABELS = {
   standard: '普通层',
@@ -72,7 +54,7 @@ export const INITIAL_STATE = {
   defeated: 0,
   // 当前游戏会话累计获得的金币数量，进入下一关后继续保留。
   gold: 0,
-  // 当前回合阶段。正常模式会快速推进，F4 调试模式会逐阶段展示。
+  // 当前回合阶段，前端据此锁定输入并推进敌人回合。
   turnPhase: 'player_input',
   // 敌人本回合准备造成的总伤害，在伤害结算阶段前暂存。
   pendingDamage: 0,
