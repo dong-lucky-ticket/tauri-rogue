@@ -51,6 +51,12 @@ export function createGameContext() {
       phaseAdvanceInFlight: false,
       // 上一次方向键触发移动的时间戳，用于长按节流。
       lastMoveInputAt: 0,
+      // FPS 统计窗口内累计的帧数。
+      fpsFrameCount: 0,
+      // FPS 统计窗口内累计经过的毫秒数。
+      fpsElapsedMs: 0,
+      // 最近一次计算出的平均 FPS，仅用于 F4 调试显示。
+      displayFps: 0,
     },
   };
 }

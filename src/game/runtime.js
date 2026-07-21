@@ -22,6 +22,8 @@ function wait(ms) {
 
 // 将 Rust 返回的 snake_case GameState 同步到前端 camelCase 状态。
 // 这是前后端数据边界的唯一入口，渲染层不直接读取 invoke 返回值。
+// options.skipEffects = true  -> 只更新状态和画面，不播放过渡特效
+// options.skipEffects = false -> 更新状态，并根据变化播放游戏反馈
 export function applyGameState(ctx, nextState, options = {}) {
   // 记录更新前的位置，用于计算玩家和敌人的移动动画起点。
   const previousPlayer = { ...ctx.state.player };

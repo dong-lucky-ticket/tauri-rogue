@@ -318,12 +318,14 @@ export function updateHud(ctx) {
   // 所有文本更新集中在这里，避免不同流程各自修改 DOM 造成显示不一致。
   const healthElement = document.querySelector('#health');
   document.querySelector('#phase').hidden = !ctx.flags.turnDebugVisible;
+  document.querySelector('#fps').hidden = !ctx.flags.turnDebugVisible;
   document.querySelector('#position').textContent = `位置 ${ctx.state.player.x}, ${ctx.state.player.y}`;
   document.querySelector('#moves').textContent = `回合 ${ctx.state.moves}`;
   document.querySelector('#level').textContent = `关卡 ${ctx.state.level}`;
   document.querySelector('#floor-type').textContent =
     FLOOR_TYPE_LABELS[ctx.state.floorType] ?? '未知层';
   document.querySelector('#phase').textContent = `阶段 ${PHASE_LABELS[ctx.state.turnPhase] ?? '进行中'}`;
+  document.querySelector('#fps').textContent = `FPS ${ctx.flags.displayFps.toFixed(0)}`;
   healthElement.textContent = `生命 ${ctx.state.hp}/${ctx.state.maxHp}`;
   healthElement.classList.toggle('health-warning', ctx.state.hp <= Math.ceil(ctx.state.maxHp / 2));
   healthElement.classList.toggle('health-critical', ctx.state.hp <= 1);
@@ -530,6 +532,19 @@ export function startTicker(ctx) {
   // ticker 是前端唯一的逐帧循环，负责呼吸、阶段动作、门户脉冲和临时特效。
   ctx.app.ticker.add(() => {
     const time = ctx.app.ticker.lastTime;
+    // 使用约 250ms 的统计窗口计算平均 FPS，避免直接显示单帧值造成跳动。
+    ctx.flags.fpsFrameCount += 1;
+    ctx.flags.fpsElapsedMs += ctx.app.ticker.deltaMS;
+    if (ctx.flags.fpsElapsedMs >= 250) {
+      ctx.flags.displayFps =
+        (ctx.flags.fpsFrameCount / ctx.flags.fpsElapsedMs) * 1000;
+      ctx.flags.fpsFrameCount = 0;
+      ctx.flags.fpsElapsedMs = 0;
+
+      // FPS 只在调试模式中显示，因此关闭调试时不频繁更新 HUD 文本。
+      if (ctx.flags.turnDebugVisible) updateHud(ctx);
+    }
+
     ctx.actorLayer.alpha = 1;
 
     if (ctx.refs.playerSprite) {
